@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sa6mwa/rrxc/pkg/anystore"
+	"github.com/sa6mwa/anystore"
 )
 
 func TestRun(t *testing.T) {

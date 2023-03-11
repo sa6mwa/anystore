@@ -9,8 +9,13 @@ Windows or other non-POSIX systems without flock(2).
 package anystore
 
 import (
+	"crypto/rand"
+	"encoding/gob"
+	"encoding/hex"
+	"fmt"
 	"sync"
 	"sync/atomic"
+	"syscall"
 )
 
 // A thread-safe key/value store using string as key and interface{} (any) as
@@ -211,8 +216,53 @@ func (u *unsafeAnyStore) Run(atomicOperation func(a AnyStore) error) error {
 
 // Persistence
 
+func rndstr(length int) string {
+	buf := make([]byte, length)
+	retries := 50
+	for i := 0; i < retries; i++ {
+		if _, err := rand.Read(buf); err != nil {
+			fmt.Println("continuing")
+			continue
+		}
+		break
+	}
+	return hex.EncodeToString(buf)
+}
+
 func save(file string, kv anyMap) error {
-	//
+	// open file
+	// syscall.Flock file LOCK_EX
+	// create file.randomstuffbehindit
+	// syscall.Flock created file
+	// write to file.randomstuffbehindit
+	// rename file.randomstuffbehindit to file
+	// close file.randomstuf...
+	// close file
+
+	// 1. syscall.Open(file, syscall.O_CREAT | syscall.O_RDONLY, 0666)
+	// 2.
+
+	fd, err := syscall.Open(file, syscall.O_CREAT|syscall.O_RDONLY, 0666)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(fd)
+	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
+		return err
+	}
+
+	newFile := file + "." + rndstr(10)
+	nfd, err := syscall.Open(newFile, syscall.O_CREAT|syscall.O_TRUNC|syscall.O_WRONLY, 0666)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(nfd)
+	if err := syscall.Flock(nfd, syscall.LOCK_EX); err != nil {
+		return err
+	}
+
+	gob.GobDecoder
+
 
 	return nil
 }

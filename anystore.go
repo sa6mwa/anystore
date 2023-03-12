@@ -1,10 +1,61 @@
 /*
 AnyStore is a thread-safe key/value store utilizing map[any]any in the
 background with atomic.Value on read and mutex locks on write for performance.
-Each map can optionally be persisted to disk as an encrypted GOB file. For
-access from multiple instances sharing the same map, POSIX syscall.Flock is used
-to exclusively lock the file during load and save. There is no support for
-Windows or other non-POSIX systems without flock(2).
+The AnyStore map can optionally be persisted to disk as an encrypted GOB file.
+For access from multiple instances sharing the same map, POSIX syscall.Flock is
+used to exclusively lock a lockfile during save. There is no support for Windows
+or other non-POSIX systems without flock(2).
+
+Example:
+
+	ephemeral, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence: false,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Store this key in a safe place, share between instances
+	encryptionKey := anystore.NewKey()
+
+	persisted, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence: true,
+		PersistenceFile: "~/.persisted-data.db",
+		EncryptionKey: encryptionKey,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := ephemeral.Store("hello", "world"); err != nil {
+		log.Fatal(err)
+	}
+	value, err := ephemeral.Load("hello")
+	if err != nil {
+		log.Fatal(err)
+	}
+	v, ok := value.(string)
+	if !ok {
+		log.Fatalf("value %q is not a string", value)
+	}
+	log.Println(v)
+
+	// Persistence works just like a non-persisted store...
+
+	if err := persisted.Store("hello", "world"); err != nil {
+		log.Fatal(err)
+	}
+	value, err := persisted.Load("hello")
+	if err != nil {
+		log.Fatal(err)
+	}
+	v, ok := value.(string)
+	if !ok {
+		log.Fatalf("value %q is not a string", value)
+	}
+	log.Println(v)
+
+	}
 */
 package anystore
 
@@ -237,18 +288,15 @@ func (a *anyStore) Store(key any, value any) error {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 	if a.persist.Load() {
-		if err := a.loadStoreAndSave(key, value, false); err != nil {
-			return err
-		}
-	} else {
-		kvO := a.kv.Load().(anyMap)
-		kvN := make(anyMap)
-		for k, v := range kvO {
-			kvN[k] = v
-		}
-		kvN[key] = value
-		a.kv.Store(kvN)
+		return a.loadStoreAndSave(key, value, false)
 	}
+	kvO := a.kv.Load().(anyMap)
+	kvN := make(anyMap)
+	for k, v := range kvO {
+		kvN[k] = v
+	}
+	kvN[key] = value
+	a.kv.Store(kvN)
 	return nil
 }
 
@@ -313,19 +361,27 @@ func (a *anyStore) load() error {
 	if !ok {
 		return errors.New("encryption key not set")
 	}
-	fd, err := syscall.Open(file, syscall.O_RDONLY, 0666)
+	// lockfile := file + ".lock"
+	// lockfd, err := syscall.Open(lockfile, syscall.O_CREAT|syscall.O_RDWR, 0666)
+	// if err != nil {
+	// 	return err
+	// }
+	// defer syscall.Close(lockfd)
+	// if err := syscall.Flock(lockfd, syscall.LOCK_EX); err != nil {
+	// 	return err
+	// }
+	data := []byte{}
+	f, err := os.OpenFile(file, os.O_RDONLY, 0666)
 	if err != nil {
-		return err
-	}
-	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
-		syscall.Close(fd)
-		return err
-	}
-	f := os.NewFile(uintptr(fd), file)
-	data, err := io.ReadAll(f)
-	f.Close() // Close as early as possible to release the file
-	if err != nil {
-		return err
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	} else {
+		data, err = io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			return err
+		}
 	}
 	kvN := make(anyMap)
 	if len(data) > 0 {
@@ -333,14 +389,10 @@ func (a *anyStore) load() error {
 		if err != nil {
 			return err
 		}
-		if len(decrypted) != 0 {
-			kvIN := make(anyMap)
+		if len(decrypted) > 0 {
 			in := gob.NewDecoder(bytes.NewReader(decrypted))
-			if err := in.Decode(&kvIN); err != nil {
+			if err := in.Decode(&kvN); err != nil {
 				return err
-			}
-			for k, v := range kvIN {
-				kvN[k] = v
 			}
 		}
 	}
@@ -354,16 +406,20 @@ func (a *anyStore) loadStoreAndSave(key any, value any, remove bool) error {
 	if !ok {
 		return errors.New("persistence file not set")
 	}
+	lockfile := file + ".lock"
 	unlink := true
-	fd, err := syscall.Open(file, syscall.O_CREAT|syscall.O_RDWR, 0666)
+	lockfd, err := syscall.Open(lockfile, syscall.O_CREAT|syscall.O_RDWR, 0666)
 	if err != nil {
 		return err
 	}
-	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
-		syscall.Close(fd)
+	defer syscall.Close(lockfd)
+	if err := syscall.Flock(lockfd, syscall.LOCK_EX); err != nil {
 		return err
 	}
-	f := os.NewFile(uintptr(fd), file)
+	f, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		return err
+	}
 	defer f.Close()
 	data, err := io.ReadAll(f)
 	if err != nil {
@@ -377,13 +433,9 @@ func (a *anyStore) loadStoreAndSave(key any, value any, remove bool) error {
 			return err
 		}
 		if len(decrypted) > 0 {
-			kvIN := make(anyMap)
 			in := gob.NewDecoder(bytes.NewReader(decrypted))
-			if err := in.Decode(&kvIN); err != nil {
+			if err := in.Decode(&kvN); err != nil {
 				return err
-			}
-			for k, v := range kvIN {
-				kvN[k] = v
 			}
 		}
 	}
@@ -395,38 +447,38 @@ func (a *anyStore) loadStoreAndSave(key any, value any, remove bool) error {
 	}
 	// Store map
 	a.kv.Store(kvN)
-	// Make new file, write store to it and rename it to the original file (all
-	// while locked).
-	newFilename := file + "." + rndstr(10)
-	nfd, err := syscall.Open(newFilename, syscall.O_CREAT|syscall.O_TRUNC|syscall.O_WRONLY, 0666)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		syscall.Close(nfd)
-		if unlink {
-			syscall.Unlink(newFilename)
-		}
-	}()
-	if err := syscall.Flock(nfd, syscall.LOCK_EX); err != nil {
-		return err
-	}
+	// Store as GOB, encrypt it and save as temporary file along-side the original
+	// and replace the main file via rename (as rename is atomic, it will not
+	// corrupt the main file in the event of a crash).
 	var gobOutput bytes.Buffer
 	out := gob.NewEncoder(&gobOutput)
-	if err := out.Encode(&kvN); err != nil {
+	if err := out.Encode(kvN); err != nil {
 		return err
 	}
 	encryptedOutput, err := Encrypt(encryptionKey, gobOutput.Bytes())
 	if err != nil {
 		return err
 	}
-	if n, err := syscall.Write(nfd, encryptedOutput); err != nil {
+	newFilename := file + "." + rndstr(10)
+	tmpf, err := os.OpenFile(newFilename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if unlink {
+			os.Remove(newFilename)
+		}
+	}()
+	if n, err := tmpf.Write(encryptedOutput); err != nil {
+		tmpf.Close()
 		return err
 	} else if n != len(encryptedOutput) {
+		tmpf.Close()
 		return ErrWroteTooLittle
 	}
-	syscall.Fsync(nfd)
-	if err := syscall.Rename(newFilename, file); err != nil {
+	tmpf.Sync()
+	tmpf.Close()
+	if err := os.Rename(newFilename, file); err != nil {
 		return err
 	}
 	unlink = false
@@ -512,18 +564,15 @@ func (u *unsafeAnyStore) Load(key any) (any, error) {
 
 func (u *unsafeAnyStore) Store(key any, value any) error {
 	if u.persist.Load() {
-		if err := u.loadStoreAndSave(key, value, false); err != nil {
-			return err
-		}
-	} else {
-		kvO := u.kv.Load().(anyMap)
-		kvN := make(anyMap)
-		for k, v := range kvO {
-			kvN[k] = v
-		}
-		kvN[key] = value
-		u.kv.Store(kvN)
+		return u.loadStoreAndSave(key, value, false)
 	}
+	kvO := u.kv.Load().(anyMap)
+	kvN := make(anyMap)
+	for k, v := range kvO {
+		kvN[k] = v
+	}
+	kvN[key] = value
+	u.kv.Store(kvN)
 	return nil
 }
 
@@ -579,19 +628,27 @@ func (u *unsafeAnyStore) load() error {
 	if !ok {
 		return errors.New("encryption key not set")
 	}
-	fd, err := syscall.Open(file, syscall.O_RDONLY, 0666)
+	// lockfile := file + ".lock"
+	// lockfd, err := syscall.Open(lockfile, syscall.O_CREAT|syscall.O_RDWR, 0666)
+	// if err != nil {
+	// 	return err
+	// }
+	// defer syscall.Close(lockfd)
+	// if err := syscall.Flock(lockfd, syscall.LOCK_EX); err != nil {
+	// 	return err
+	// }
+	data := []byte{}
+	f, err := os.OpenFile(file, os.O_RDONLY, 0666)
 	if err != nil {
-		return err
-	}
-	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
-		syscall.Close(fd)
-		return err
-	}
-	f := os.NewFile(uintptr(fd), file)
-	data, err := io.ReadAll(f)
-	f.Close() // Close as early as possible to release the file
-	if err != nil {
-		return err
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	} else {
+		data, err = io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			return err
+		}
 	}
 	kvN := make(anyMap)
 	if len(data) > 0 {
@@ -600,13 +657,9 @@ func (u *unsafeAnyStore) load() error {
 			return err
 		}
 		if len(decrypted) > 0 {
-			kvIN := make(anyMap)
 			in := gob.NewDecoder(bytes.NewReader(decrypted))
-			if err := in.Decode(&kvIN); err != nil {
+			if err := in.Decode(&kvN); err != nil {
 				return err
-			}
-			for k, v := range kvIN {
-				kvN[k] = v
 			}
 		}
 	}
@@ -620,16 +673,20 @@ func (u *unsafeAnyStore) loadStoreAndSave(key any, value any, remove bool) error
 	if !ok {
 		return errors.New("persistence file not set")
 	}
+	lockfile := file + ".lock"
 	unlink := true
-	fd, err := syscall.Open(file, syscall.O_CREAT|syscall.O_RDWR, 0666)
+	lockfd, err := syscall.Open(lockfile, syscall.O_CREAT|syscall.O_RDWR, 0666)
 	if err != nil {
 		return err
 	}
-	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
-		syscall.Close(fd)
+	defer syscall.Close(lockfd)
+	if err := syscall.Flock(lockfd, syscall.LOCK_EX); err != nil {
 		return err
 	}
-	f := os.NewFile(uintptr(fd), file)
+	f, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		return err
+	}
 	defer f.Close()
 	data, err := io.ReadAll(f)
 	if err != nil {
@@ -643,13 +700,9 @@ func (u *unsafeAnyStore) loadStoreAndSave(key any, value any, remove bool) error
 			return err
 		}
 		if len(decrypted) > 0 {
-			kvIN := make(anyMap)
 			in := gob.NewDecoder(bytes.NewReader(decrypted))
-			if err := in.Decode(&kvIN); err != nil {
+			if err := in.Decode(&kvN); err != nil {
 				return err
-			}
-			for k, v := range kvIN {
-				kvN[k] = v
 			}
 		}
 	}
@@ -661,38 +714,38 @@ func (u *unsafeAnyStore) loadStoreAndSave(key any, value any, remove bool) error
 	}
 	// Store map
 	u.kv.Store(kvN)
-	// Make new file, write store to it and rename it to the original file (all
-	// while locked).
-	newFilename := file + "." + rndstr(10)
-	nfd, err := syscall.Open(newFilename, syscall.O_CREAT|syscall.O_TRUNC|syscall.O_WRONLY, 0666)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		syscall.Close(nfd)
-		if unlink {
-			syscall.Unlink(newFilename)
-		}
-	}()
-	if err := syscall.Flock(nfd, syscall.LOCK_EX); err != nil {
-		return err
-	}
+	// Store as GOB, encrypt it and save as temporary file along-side the original
+	// and replace the main file via rename (as rename is atomic, it will not
+	// corrupt the main file in the event of a crash).
 	var gobOutput bytes.Buffer
 	out := gob.NewEncoder(&gobOutput)
-	if err := out.Encode(&kvN); err != nil {
+	if err := out.Encode(kvN); err != nil {
 		return err
 	}
 	encryptedOutput, err := Encrypt(encryptionKey, gobOutput.Bytes())
 	if err != nil {
 		return err
 	}
-	if n, err := syscall.Write(nfd, encryptedOutput); err != nil {
+	newFilename := file + "." + rndstr(10)
+	tmpf, err := os.OpenFile(newFilename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if unlink {
+			os.Remove(newFilename)
+		}
+	}()
+	if n, err := tmpf.Write(encryptedOutput); err != nil {
+		tmpf.Close()
 		return err
 	} else if n != len(encryptedOutput) {
+		tmpf.Close()
 		return ErrWroteTooLittle
 	}
-	syscall.Fsync(nfd)
-	if err := syscall.Rename(newFilename, file); err != nil {
+	tmpf.Sync()
+	tmpf.Close()
+	if err := os.Rename(newFilename, file); err != nil {
 		return err
 	}
 	unlink = false
@@ -769,92 +822,4 @@ func Decrypt(key []byte, data []byte) ([]byte, error) {
 	stream := cipher.NewCFBDecrypter(block, salt)
 	stream.XORKeyStream(deciphered, data[aes.BlockSize:])
 	return deciphered, nil
-}
-
-func load(key []byte, file string) (anyMap, error) {
-	// open file
-	// flock w/ LOCK_EX
-	// os.NewFile
-	// io.ReadAll
-	// close
-	// decrypt(data)
-	// gob.Decode()
-	fd, err := syscall.Open(file, syscall.O_RDONLY, 0666)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
-		syscall.Close(fd)
-		return nil, err
-	}
-	f := os.NewFile(uintptr(fd), file)
-	data, err := io.ReadAll(f)
-	f.Close() // Close as early as possible to release the file
-	if err != nil {
-		return nil, err
-	}
-	decrypted, err := Decrypt(key, data)
-	if err != nil {
-		return nil, err
-	}
-	kvIN := make(anyMap)
-	in := gob.NewDecoder(bytes.NewReader(decrypted))
-	if err := in.Decode(&kvIN); err != nil {
-		return nil, err
-	}
-	return kvIN, nil
-}
-
-func save(key []byte, file string, kv anyMap) error {
-	// open file
-	// syscall.Flock file LOCK_EX
-	// create file.randomstuffbehindit
-	// syscall.Flock created file
-	// write to file.randomstuffbehindit
-	// rename file.randomstuffbehindit to file
-	// close file.randomstuf...
-	// close file
-
-	unlink := true
-
-	fd, err := syscall.Open(file, syscall.O_CREAT|syscall.O_RDONLY, 0666)
-	if err != nil {
-		return err
-	}
-	defer syscall.Close(fd)
-	if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {
-		return err
-	}
-	newFilename := file + "." + rndstr(10)
-	nfd, err := syscall.Open(newFilename, syscall.O_CREAT|syscall.O_TRUNC|syscall.O_WRONLY, 0666)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		syscall.Close(nfd)
-		if unlink {
-			syscall.Unlink(newFilename)
-		}
-	}()
-	if err := syscall.Flock(nfd, syscall.LOCK_EX); err != nil {
-		return err
-	}
-	var gobOutput bytes.Buffer
-	out := gob.NewEncoder(&gobOutput)
-	out.Encode(kv)
-	encryptedOutput, err := Encrypt(key, gobOutput.Bytes())
-	if err != nil {
-		return err
-	}
-	if n, err := syscall.Write(nfd, encryptedOutput); err != nil {
-		return err
-	} else if n != len(encryptedOutput) {
-		return ErrWroteTooLittle
-	}
-	syscall.Fsync(nfd)
-	if err := syscall.Rename(newFilename, file); err != nil {
-		return err
-	}
-	unlink = false
-	return nil
 }

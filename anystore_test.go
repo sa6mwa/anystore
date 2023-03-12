@@ -17,7 +17,10 @@ func TestAnyStore_Run_persisted(t *testing.T) {
 	}
 	tempfile := f.Name()
 	f.Close()
-	defer os.Remove(tempfile)
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
 
 	errTesting := errors.New("this error")
 	a, err := anystore.NewAnyStore(&anystore.Options{
@@ -171,7 +174,10 @@ func ExampleAnyStore_Store_encrypt() {
 	}
 	tempfile := f.Name()
 	f.Close()
-	defer os.Remove(tempfile)
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
 
 	a, err := anystore.NewAnyStore(&anystore.Options{
 		EnablePersistence: true,
@@ -222,14 +228,17 @@ func ExampleAnyStore_Store_encrypt() {
 }
 
 func BenchmarkStoreAndLoadPersistence(b *testing.B) {
-	f, err := os.CreateTemp("", "anystore-example-*")
+	f, err := os.CreateTemp("", "anystore-benchmark-*")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 	tempfile := f.Name()
 	f.Close()
-	defer os.Remove(tempfile)
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
 
 	a, err := anystore.NewAnyStore(&anystore.Options{
 		EnablePersistence: true,
@@ -283,4 +292,88 @@ func BenchmarkStoreAndLoad(b *testing.B) {
 			}
 		}
 	}
+}
+
+func FuzzConcurrentPersistence(f *testing.F) {
+
+	f.Add(1, "hello world")
+
+	f.Fuzz(func(t *testing.T, count int, valueToStore string) {
+		file, err := os.CreateTemp("", "anystore-concurrent-fuzz-*")
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		tempfile := file.Name()
+		file.Close()
+		defer func() {
+			os.Remove(tempfile)
+			os.Remove(tempfile + ".lock")
+		}()
+
+		ch1 := make(chan struct{})
+		ch2 := make(chan struct{})
+
+		go func() {
+			defer close(ch1)
+			one, err := anystore.NewAnyStore(&anystore.Options{
+				EnablePersistence: true,
+				PersistenceFile:   tempfile,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < count; i++ {
+				key := fmt.Sprintf("one-%d", i)
+				value := valueToStore
+				if err := one.Store(key, value); err != nil {
+					t.Fatal(err)
+				}
+				if v, err := one.Load(key); err != nil {
+					t.Fatal(err)
+				} else {
+					val, ok := v.(string)
+					if !ok {
+						t.Fatalf("value %q is not a string (expected %q=%q)", val, key, value)
+					}
+					if val != value {
+						t.Fatalf("value %q does not match expected string %q", val, value)
+					}
+				}
+			}
+		}()
+
+		go func() {
+			defer close(ch2)
+			two, err := anystore.NewAnyStore(&anystore.Options{
+				EnablePersistence: true,
+				PersistenceFile:   tempfile,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < count; i++ {
+				key := fmt.Sprintf("two-%d", i)
+				value := valueToStore
+				if err := two.Store(key, value); err != nil {
+					t.Fatal(err)
+				}
+				if v, err := two.Load(key); err != nil {
+					t.Fatal(err)
+				} else {
+					val, ok := v.(string)
+					if !ok {
+						t.Fatalf("value %q is not a string (expected %q=%q)", val, key, value)
+					}
+					if val != value {
+						t.Fatalf("value %q does not match expected string %q", val, value)
+					}
+				}
+			}
+		}()
+
+		<-ch1
+		<-ch2
+	})
+
 }

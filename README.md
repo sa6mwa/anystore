@@ -8,16 +8,17 @@ Darwin, etc).
 ## Persistence, not performance
 
 The persistence-feature is not designed for performance, but for simplicity,
-durability and concurrent access by concurrent processes/instances. The entire
+durability and concurrent access by multiple processes/instances. The entire
 key/value store (`map[any]any`) is loaded and persisted on retrieving or storing
-every key/value pair making it slow with many keys, but can be sharded manually
-by managing several AnyStores. Concurrent access relies entirely on locking a
-lockfile using `syscall.Flock` (`flock(2)`). When new keys are stored, they are
-saved in a temporary file which is renamed to the main encrypted GOB file. A
-rename operation is atomic and survivable in case of failure. The `flock` on the
-lockfile is released once the rename has completed successfully. On load, the
-lock on the lockfile is not acquired - the operation relies on the atomic nature
-of `rename`.
+every key/value pair making it slow with many keys (can be sharded manually
+by managing several AnyStores).
+
+Concurrent access relies entirely on locking a lockfile using `syscall.Flock`
+(`flock(2)`). When new keys are stored, they are saved in a temporary file which
+is renamed to the main encrypted GOB file. A rename operation is atomic and
+survivable in case of failure. The `flock` on the lockfile is released when the
+rename has completed successfully. On load, the lock on the lockfile is not
+acquired - the operation relies on the atomic nature of `rename`.
 
 ```
 $ go test -bench=. -run='^#' -count=5

@@ -1,10 +1,10 @@
 /*
 AnyStore is a thread-safe key/value store utilizing map[any]any in the
 background with atomic.Value on read and mutex locks on write for performance.
-The AnyStore map can optionally be persisted to disk as an encrypted GOB file.
-For access from multiple instances sharing the same map, POSIX syscall.Flock is
-used to exclusively lock a lockfile during save. There is no support for Windows
-or other non-POSIX systems without flock(2).
+The AnyStore map can optionally be persisted to disk as an AES-128/192/256
+encrypted GOB file. For access from multiple instances sharing the same map,
+POSIX syscall.Flock is used to exclusively lock a lockfile during save. There is
+no support for Windows or other non-POSIX systems without flock(2).
 
 Example:
 
@@ -56,6 +56,78 @@ Example:
 	log.Println(v)
 
 	}
+
+AnyStore also feature a configuration mode with convenience-functions Stash,
+Unstash and EditThing. Whether you choose to hard-code an encryption key in the
+application or provide one via environment variables, using Stash, Unstash and
+EditThing is simple...
+
+	package main
+
+	import (
+		"encoding/json"
+		"fmt"
+		"log"
+		"os"
+
+		"github.com/sa6mwa/anystore"
+	)
+
+	// All fields need to be exported.
+	type MyConfig struct {
+		ListenAddress string
+		Username      string
+		Token         string
+		Endpoints     []*Endpoint
+	}
+
+	type Endpoint struct {
+		ID   int
+		Name string
+		URL  string
+	}
+
+	func main() {
+		defaultConf := &MyConfig{
+			ListenAddress: "0.0.0.0:1234",
+			Username:      "superuser",
+			Token:         "abc123",
+			Endpoints: []*Endpoint{
+				{ID: 1, Name: "Endpoint 1", URL: "https://endpoint1.local"},
+				{ID: 2, Name: "Endpoint 2", URL: "https://endpoint2.local"},
+			},
+		}
+		file := "~/.myconfigfile.db"
+
+		var configuration MyConfig
+
+		if err := anystore.Unstash(&anystore.StashConfig{
+			File:          file,
+			EncryptionKey: anystore.DefaultEncryptionKey,
+			Key:           "configuration",
+			Thing:         &configuration,
+		}, defaultConf); err != nil {
+			log.Fatal(err)
+		}
+
+		if len(os.Args) > 1 && os.Args[1] == "edit" {
+			if err := anystore.EditThing(&anystore.StashConfig{
+				File:          file,
+				EncryptionKey: anystore.DefaultEncryptionKey,
+				Key:           "configuration",
+				Thing:         &configuration,
+				// Editor: "/usr/bin/emacs",
+			}, defaultConf); err != nil {
+				log.Fatal(err)
+			}
+		}
+
+		j, err := json.MarshalIndent(configuration, "", "  ")
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(string(j))
+	}
 */
 package anystore
 
@@ -78,7 +150,7 @@ import (
 	"syscall"
 )
 
-const DefaultKey string = "cTAvflqncVmYD7bLM31fP3TVuwEoosMMwehpIwn1P84"
+const DefaultEncryptionKey string = "cTAvflqncVmYD7bLM31fP3TVuwEoosMMwehpIwn1P84"
 
 const DefaultPersistenceFile string = "~/.config/anystore/anystore.db"
 
@@ -199,7 +271,7 @@ func NewAnyStore(o *Options) (AnyStore, error) {
 			return a, err
 		}
 	} else {
-		if _, err := a.SetEncryptionKey(DefaultKey); err != nil {
+		if _, err := a.SetEncryptionKey(DefaultEncryptionKey); err != nil {
 			return a, err
 		}
 	}
@@ -227,10 +299,14 @@ func (a *anyStore) SetPersistenceFile(file string) (AnyStore, error) {
 			return a, err
 		}
 	}
-	if fd, err := syscall.Open(file, syscall.O_CREAT|syscall.O_RDWR, 0666); err != nil {
-		return a, err
+
+	f, err := os.OpenFile(file, os.O_RDWR, 0666)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return a, err
+		}
 	} else {
-		syscall.Close(fd)
+		f.Close()
 	}
 	a.savefile.Store(file)
 	return a, nil
@@ -509,10 +585,13 @@ func (u *unsafeAnyStore) SetPersistenceFile(file string) (AnyStore, error) {
 			return u, err
 		}
 	}
-	if fd, err := syscall.Open(file, syscall.O_CREAT|syscall.O_RDWR, 0666); err != nil {
-		return u, err
+	f, err := os.OpenFile(file, os.O_RDWR, 0666)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return u, err
+		}
 	} else {
-		syscall.Close(fd)
+		f.Close()
 	}
 	u.savefile.Store(file)
 	return u, nil

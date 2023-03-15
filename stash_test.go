@@ -2,6 +2,9 @@ package anystore_test
 
 import (
 	"errors"
+	"fmt"
+	"io"
+	"log"
 	"os"
 	"reflect"
 	"testing"
@@ -25,7 +28,7 @@ func strptr(s string) *string {
 	return &s
 }
 
-func doStash(file string, encryptionKey string) error {
+func doStash(file string, writer io.WriteCloser, encryptionKey string) error {
 	expectedThing := &Thing{
 		Name:        strptr("Hello World"),
 		Number:      32,
@@ -36,31 +39,37 @@ func doStash(file string, encryptionKey string) error {
 			{ID: 3, Name: "Component three"},
 		},
 	}
-	if err := anystore.Stash(&anystore.StashConfig{
+
+	stashconf := anystore.StashConfig{
 		File:          file,
 		EncryptionKey: encryptionKey,
 		Key:           "configuration",
 		Thing:         expectedThing,
-	}); err != nil {
+		Writer:        writer,
+	}
+
+	if err := anystore.Stash(&stashconf); err != nil {
 		return err
 	}
 	return nil
 }
 
-func doUnstash(file string, encryptionKey string) (Thing, error) {
+func doUnstash(file string, reader io.Reader, encryptionKey string) (Thing, error) {
 	var gotThing Thing
+
 	if err := anystore.Unstash(&anystore.StashConfig{
 		File:          file,
 		EncryptionKey: encryptionKey,
 		Key:           "configuration",
 		Thing:         &gotThing,
+		Reader:        reader,
 	}, nil); err != nil {
 		return Thing{}, err
 	}
 	return gotThing, nil
 }
 
-func doUnstashDefault(file string, encryptionKey string) (Thing, error) {
+func doUnstashDefault(file string, reader io.Reader, encryptionKey string) (Thing, error) {
 	defaultThing := &Thing{
 		Name:        strptr("Hello World"),
 		Number:      32,
@@ -77,6 +86,7 @@ func doUnstashDefault(file string, encryptionKey string) (Thing, error) {
 		EncryptionKey: encryptionKey,
 		Key:           "key_not_in_stash",
 		Thing:         &gotThing,
+		Reader:        reader,
 	}, defaultThing); err != nil {
 		return Thing{}, err
 	}
@@ -176,10 +186,67 @@ func TestStash(t *testing.T) {
 			{ID: 3, Name: "Component three"},
 		},
 	}
-	if err := doStash(tempfile, secret); err != nil {
+	if err := doStash(tempfile, nil, secret); err != nil {
 		t.Fatal(err)
 	}
-	gotThing, err := doUnstash(tempfile, secret)
+	gotThing, err := doUnstash(tempfile, nil, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&gotThing, expectedThing) {
+		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
+	}
+}
+
+func TestStash_doublestash(t *testing.T) {
+	secret := anystore.NewKey()
+	fl, err := os.CreateTemp("", "anystore-stash-double-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempfile := fl.Name()
+	fl.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+
+	expectedThing := &Thing{
+		Name:        strptr("Hello World"),
+		Number:      32,
+		Description: "There is not much to a Hello World thing.",
+		Components: []*Component{
+			{ID: 1, Name: "Component one"},
+			{ID: 2, Name: "Component two"},
+			{ID: 3, Name: "Component three"},
+		},
+	}
+
+	reader, writer := io.Pipe()
+	defer reader.Close() // writer will be closed by Stash
+	errch := make(chan error)
+	go func() {
+		defer close(errch)
+		gt, err := doUnstash("", reader, secret)
+		if err != nil {
+			errch <- err
+			return
+		}
+		if !reflect.DeepEqual(&gt, expectedThing) {
+			errch <- fmt.Errorf("got %s and expected %s does not match", reflect.TypeOf(gt), reflect.TypeOf(expectedThing))
+			return
+		}
+		errch <- nil
+	}()
+	if err := doStash(tempfile, writer, secret); err != nil {
+		t.Fatal(err)
+	}
+	err = <-errch
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotThing, err := doUnstash(tempfile, nil, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,17 +277,17 @@ func TestUnstash(t *testing.T) {
 			{ID: 3, Name: "Component three"},
 		},
 	}
-	if err := doStash(tempfile, secret); err != nil {
+	if err := doStash(tempfile, nil, secret); err != nil {
 		t.Fatal(err)
 	}
-	gotThing, err := doUnstash(tempfile, secret)
+	gotThing, err := doUnstash(tempfile, nil, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(&gotThing, expectedThing) {
 		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
 	}
-	gotThing, err = doUnstashDefault(tempfile, secret)
+	gotThing, err = doUnstashDefault(tempfile, nil, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +295,49 @@ func TestUnstash(t *testing.T) {
 		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
 	}
 
+	// Test io.Reader, should be the same as the expectedThing
+	if err := doStash(tempfile, nil, secret); err != nil {
+		t.Fatal(err)
+	}
+	tf, err := os.Open(tempfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotThing, err = doUnstash("", tf, secret)
+	tf.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&gotThing, expectedThing) {
+		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
+	}
+
+	// Test stashing to an io.Writer and unstash from an io.Reader using io.Pipe.
+	reader, writer := io.Pipe()
+	defer reader.Close() // writer will be closed by Stash
+	errch := make(chan error)
+	go func() {
+		defer close(errch)
+		gt, err := doUnstash("", reader, secret)
+		if err != nil {
+			errch <- err
+			return
+		}
+		if !reflect.DeepEqual(&gt, expectedThing) {
+			errch <- fmt.Errorf("got %s and expected %s does not match", reflect.TypeOf(gt), reflect.TypeOf(expectedThing))
+			return
+		}
+		errch <- nil
+	}()
+	if err := doStash("", writer, secret); err != nil {
+		t.Fatal(err)
+	}
+	err = <-errch
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test negative case (key not found)
 	var gotThing2 Thing
 	if err := anystore.Unstash(&anystore.StashConfig{
 		File:          tempfile,
@@ -241,4 +351,44 @@ func TestUnstash(t *testing.T) {
 	} else {
 		t.Error("expected anystore.ErrThingNotFound")
 	}
+}
+
+func ExampleStash_reader_writer() {
+	greeting := "Hello world"
+	var receivedGreeting string
+
+	reader, writer := io.Pipe()
+	defer reader.Close() // Stash closes the writer, it's an io.ReadCloser
+
+	errch := make(chan error)
+
+	go func() {
+		defer close(errch)
+		if err := anystore.Unstash(&anystore.StashConfig{
+			Reader: reader,
+			Key:    "secret",
+			Thing:  &receivedGreeting,
+		}, nil); err != nil {
+			errch <- err
+		}
+		errch <- nil
+	}()
+
+	if err := anystore.Stash(&anystore.StashConfig{
+		Writer: writer,
+		Key:    "secret",
+		Thing:  &greeting,
+	}); err != nil {
+		log.Fatal(err)
+	}
+
+	err := <-errch
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(receivedGreeting)
+
+	// Output:
+	// Hello world
 }

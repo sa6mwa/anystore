@@ -1,6 +1,8 @@
 package anystore_test
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -163,6 +165,23 @@ func TestAnyStore_Run(t *testing.T) {
 	}
 	if nilVal != nil {
 		t.Errorf("expected nil, but got %T", nilVal)
+	}
+}
+
+func TestAnyStore_GetEncryptionKeyBytes(t *testing.T) {
+	expected, err := base64.RawStdEncoding.DecodeString(anystore.DefaultEncryptionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obtained := a.GetEncryptionKeyBytes()
+	if !bytes.Equal(expected, obtained) {
+		t.Error("obtained bytes from AnyStore.GetEncryptionKeyBytes() and expected bytes do not match")
 	}
 }
 

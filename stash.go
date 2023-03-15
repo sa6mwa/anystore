@@ -24,18 +24,38 @@ var (
 // string, Reader will be preferred over File when executing Unstash. If Writer
 // is not nil and File is not an empty string when executing Stash, the file
 // will be written first, then written to through the io.Writer (both will be
-// written to). If File is an empty string (== "") and Writer is not nil, Stash
-// will only write to the io.Writer.
+// written to). Writer.Close() is deferred early, Stash always closes the writer
+// on success and failure. If File is an empty string (== "") and Writer is not
+// nil, Stash will only write to the io.Writer.
 type StashConfig struct {
-	File          string    // AnyStore DB file, if empty, use Reader/Writer
-	Reader        io.Reader // If nil, use File for Unstash, if not, prefer Reader over File
-	Writer        io.Writer // If nil, use File for Stash, if not, write to both Writer and File (if File is not an empty string)
-	EncryptionKey string    // 16, 24 or 32 byte long base64-encoded string
-	Key           string    // Key name where to store Thing
-	Thing         any       // Usually a struct with data, properties, configuration, etc
-	Editor        string    // Editor to use to edit Thing as JSON
+	File          string         // AnyStore DB file, if empty, use Reader/Writer
+	Reader        io.Reader      // If nil, use File for Unstash, if not, prefer Reader over File
+	Writer        io.WriteCloser // If nil, use File for Stash, if not, write to both Writer and File (if File is not an empty string)
+	EncryptionKey string         // 16, 24 or 32 byte long base64-encoded string
+	Key           string         // Key name where to store Thing
+	Thing         any            // Usually a struct with data, properties, configuration, etc
+	Editor        string         // Editor to use to edit Thing as JSON
 }
 
+// "stash, verb. to put (something of future use or value) in a safe or secret
+// place"
+//
+// Unstash loads a "Thing" from a place specified in a StashConfig, usually an
+// AnyStore DB file, but the Stash and Unstash functions also support io.Reader
+// and io.Writer (io.WriteCloser). Reader/writer is essentially an in-memory
+// version of the physical DB file, Unstash does io.ReadAll into memory in order
+// to decrypt and de-GOB the data. A previous file-Stash command can be
+// Unstashed via the io.Reader. Unstash prefers io.Reader when both
+// StashConfig.File and StashConfig.Reader are defined.
+//
+// StashConfig instructs how functions anystore.Stash and anystore.Unstash
+// should save/load a "stash". If Reader is not nil and File is not an empty
+// string, Reader will be preferred over File when executing Unstash. If Writer
+// is not nil and File is not an empty string when executing Stash, the file
+// will be written first, then written to through the io.Writer (both will be
+// written to). Writer.Close() is deferred early, Stash always closes the writer
+// on success and failure. If File is an empty string (== "") and Writer is not
+// nil, Stash will only write to the io.Writer.
 func Unstash(conf *StashConfig, defaultThing any) error {
 	if conf.Thing == nil {
 		return ErrNilThing
@@ -113,7 +133,26 @@ func Unstash(conf *StashConfig, defaultThing any) error {
 
 // "stash, verb. to put (something of future use or value) in a safe or secret
 // place"
+//
+// Stash stores a "Thing" according to a StashConfig, usually an AnyStore DB
+// file, but Stash and Unstash can also be used with an io.Writer
+// (io.WriteCloser) and an io.Reader for arbitrary stashing/unstashing. Stash
+// always closes the writer on exit (why it's an io.WriteCloser). The
+// reader/writers are essentially in-memory versions of the physical DB file,
+// Unstash does io.ReadAll into memory in order to decrypt and de-GOB it.
+//
+// StashConfig instructs how functions anystore.Stash and anystore.Unstash
+// should save/load a "stash". If Reader is not nil and File is not an empty
+// string, Reader will be preferred over File when executing Unstash. If Writer
+// is not nil and File is not an empty string when executing Stash, the file
+// will be written first, then written to through the io.Writer (both will be
+// written to). Writer.Close() is deferred early, Stash always closes the writer
+// on success and failure. If File is an empty string (== "") and Writer is not
+// nil, Stash will only write to the io.Writer.
 func Stash(conf *StashConfig) error {
+	if conf.Writer != nil {
+		defer conf.Writer.Close()
+	}
 	value := reflect.ValueOf(conf.Thing)
 	if value.Type().Kind() != reflect.Pointer {
 		return ErrNotAPointer

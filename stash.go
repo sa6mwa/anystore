@@ -46,22 +46,23 @@ func Unstash(conf *StashConfig, defaultThing any) error {
 	if conf.File == "" && conf.Reader == nil {
 		return ErrMissingReader
 	}
-
 	options := Options{
-		PersistenceFile: conf.File,
-		EncryptionKey:   conf.EncryptionKey,
+		EnablePersistence: true,
+		PersistenceFile:   conf.File,
+		EncryptionKey:     conf.EncryptionKey,
 	}
+	// If we have an io.Reader, prefer it above File.
 	if conf.Reader != nil {
 		options.EnablePersistence = false
 	}
-
 	a, err := NewAnyStore(&options)
 	if err != nil {
 		return err
 	}
-
 	var gobbedThing any
 	if conf.Reader != nil {
+		// Read encrypted anyMap
+		kv := make(anyMap)
 		data, err := io.ReadAll(conf.Reader)
 		if err != nil {
 			return err
@@ -70,15 +71,24 @@ func Unstash(conf *StashConfig, defaultThing any) error {
 		if err != nil {
 			return err
 		}
-		gobbedThing = decrypted
+		in := gob.NewDecoder(bytes.NewReader(decrypted))
+		if err := in.Decode(&kv); err != nil {
+			return err
+		}
+		var ok bool
+		gobbedThing, ok = kv[conf.Key]
+		if !ok {
+			return ErrThingNotFound
+		}
 	} else {
+		// Load key from PersistenceFile instead.
 		var err error
 		gobbedThing, err = a.Load(conf.Key)
 		if err != nil {
 			return err
 		}
 	}
-
+	// GOB encoded thing came from either file or io.Reader.
 	thing, ok := gobbedThing.([]byte)
 	if !ok {
 		if defaultThing != nil {
@@ -111,14 +121,28 @@ func Stash(conf *StashConfig) error {
 	if value.IsNil() {
 		return ErrNilThing
 	}
-	a, err := NewAnyStore(&Options{
-		EnablePersistence: true,
-		PersistenceFile:   conf.File,
-		EncryptionKey:     conf.EncryptionKey,
-	})
+	if conf.Key == "" {
+		return ErrEmptyKey
+	}
+	if conf.File == "" && conf.Writer == nil {
+		return ErrMissingWriter
+	}
+
+	options := Options{
+		PersistenceFile: conf.File,
+		EncryptionKey:   conf.EncryptionKey,
+	}
+	if conf.File == "" {
+		options.EnablePersistence = false
+	} else {
+		options.EnablePersistence = true
+	}
+
+	a, err := NewAnyStore(&options)
 	if err != nil {
 		return err
 	}
+
 	// Use gob to store the struct (or other value) instead of re-inventing
 	// dereference of all pointers. It is also unlikely that the interface stored
 	// is registered with gob in the downstream anystore package.
@@ -127,5 +151,31 @@ func Stash(conf *StashConfig) error {
 	if err := g.Encode(conf.Thing); err != nil {
 		return fmt.Errorf("gob.Encode of StashConfig.Thing: %w", err)
 	}
-	return a.Store(conf.Key, thing.Bytes())
+	// Persist to file if filename was not an empty string.
+	if conf.File != "" {
+		if err := a.Store(conf.Key, thing.Bytes()); err != nil {
+			return err
+		}
+	}
+	// If conf.Writer was given, also write to the io.Writer, but this has to be
+	// emulated (AnyStore does not implement io.Writer or io.Reader).
+	if conf.Writer != nil {
+		kv := make(anyMap)
+		kv[conf.Key] = thing.Bytes()
+		var gobOutput bytes.Buffer
+		out := gob.NewEncoder(&gobOutput)
+		if err := out.Encode(kv); err != nil {
+			return err
+		}
+		encrypted, err := Encrypt(a.GetEncryptionKeyBytes(), gobOutput.Bytes())
+		if err != nil {
+			return err
+		}
+		if n, err := conf.Writer.Write(encrypted); err != nil {
+			return err
+		} else if n != len(encrypted) {
+			return ErrWroteTooLittle
+		}
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package anystore_test
 
 import (
 	"errors"
+	"io"
 	"os"
 	"reflect"
 	"testing"
@@ -25,7 +26,7 @@ func strptr(s string) *string {
 	return &s
 }
 
-func doStash(file string, encryptionKey string) error {
+func doStash(file string, writer io.Writer, encryptionKey string) error {
 	expectedThing := &Thing{
 		Name:        strptr("Hello World"),
 		Number:      32,
@@ -36,31 +37,37 @@ func doStash(file string, encryptionKey string) error {
 			{ID: 3, Name: "Component three"},
 		},
 	}
-	if err := anystore.Stash(&anystore.StashConfig{
+
+	stashconf := anystore.StashConfig{
 		File:          file,
 		EncryptionKey: encryptionKey,
 		Key:           "configuration",
 		Thing:         expectedThing,
-	}); err != nil {
+		Writer:        writer,
+	}
+
+	if err := anystore.Stash(&stashconf); err != nil {
 		return err
 	}
 	return nil
 }
 
-func doUnstash(file string, encryptionKey string) (Thing, error) {
+func doUnstash(file string, reader io.Reader, encryptionKey string) (Thing, error) {
 	var gotThing Thing
+
 	if err := anystore.Unstash(&anystore.StashConfig{
 		File:          file,
 		EncryptionKey: encryptionKey,
 		Key:           "configuration",
 		Thing:         &gotThing,
+		Reader:        reader,
 	}, nil); err != nil {
 		return Thing{}, err
 	}
 	return gotThing, nil
 }
 
-func doUnstashDefault(file string, encryptionKey string) (Thing, error) {
+func doUnstashDefault(file string, reader io.Reader, encryptionKey string) (Thing, error) {
 	defaultThing := &Thing{
 		Name:        strptr("Hello World"),
 		Number:      32,
@@ -77,6 +84,7 @@ func doUnstashDefault(file string, encryptionKey string) (Thing, error) {
 		EncryptionKey: encryptionKey,
 		Key:           "key_not_in_stash",
 		Thing:         &gotThing,
+		Reader:        reader,
 	}, defaultThing); err != nil {
 		return Thing{}, err
 	}
@@ -176,10 +184,10 @@ func TestStash(t *testing.T) {
 			{ID: 3, Name: "Component three"},
 		},
 	}
-	if err := doStash(tempfile, secret); err != nil {
+	if err := doStash(tempfile, nil, secret); err != nil {
 		t.Fatal(err)
 	}
-	gotThing, err := doUnstash(tempfile, secret)
+	gotThing, err := doUnstash(tempfile, nil, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,17 +218,17 @@ func TestUnstash(t *testing.T) {
 			{ID: 3, Name: "Component three"},
 		},
 	}
-	if err := doStash(tempfile, secret); err != nil {
+	if err := doStash(tempfile, nil, secret); err != nil {
 		t.Fatal(err)
 	}
-	gotThing, err := doUnstash(tempfile, secret)
+	gotThing, err := doUnstash(tempfile, nil, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(&gotThing, expectedThing) {
 		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
 	}
-	gotThing, err = doUnstashDefault(tempfile, secret)
+	gotThing, err = doUnstashDefault(tempfile, nil, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +236,26 @@ func TestUnstash(t *testing.T) {
 		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
 	}
 
+	// Test io.Reader, should be the same as the expectedThing
+	if err := doStash(tempfile, nil, secret); err != nil {
+		t.Fatal(err)
+	}
+	tf, err := os.Open(tempfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotThing, err = doUnstash("", tf, secret)
+	tf.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&gotThing, expectedThing) {
+		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
+	}
+
+	// Test
+
+	// Test negative case (key not found)
 	var gotThing2 Thing
 	if err := anystore.Unstash(&anystore.StashConfig{
 		File:          tempfile,

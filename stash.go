@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 )
 
@@ -14,14 +15,25 @@ var (
 	ErrNotAPointer   error = errors.New("stash configuration does not point to thing, need a pointer")
 	ErrThingNotFound error = errors.New("thing not found in stash")
 	ErrTypeMismatch  error = errors.New("type-mismatch between thing and default thing")
+	ErrMissingReader error = errors.New("missing filename (or io.Reader) to load persisted data from")
+	ErrMissingWriter error = errors.New("missing filename (or io.Writer) to persist data to")
 )
 
+// StashConfig instructs how functions anystore.Stash and anystore.Unstash
+// should save/load a "stash". If Reader is not nil and File is not an empty
+// string, Reader will be preferred over File when executing Unstash. If Writer
+// is not nil and File is not an empty string when executing Stash, the file
+// will be written first, then written to through the io.Writer (both will be
+// written to). If File is an empty string (== "") and Writer is not nil, Stash
+// will only write to the io.Writer.
 type StashConfig struct {
-	File          string // AnyStore DB file
-	EncryptionKey string // 16, 24 or 32 byte long base64-encoded string
-	Key           string // Key name where to store Thing
-	Thing         any    // Usually a struct with data, properties, configuration, etc
-	Editor        string // Editor to use to edit Thing as JSON
+	File          string    // AnyStore DB file, if empty, use Reader/Writer
+	Reader        io.Reader // If nil, use File for Unstash, if not, prefer Reader over File
+	Writer        io.Writer // If nil, use File for Stash, if not, write to both Writer and File (if File is not an empty string)
+	EncryptionKey string    // 16, 24 or 32 byte long base64-encoded string
+	Key           string    // Key name where to store Thing
+	Thing         any       // Usually a struct with data, properties, configuration, etc
+	Editor        string    // Editor to use to edit Thing as JSON
 }
 
 func Unstash(conf *StashConfig, defaultThing any) error {
@@ -31,19 +43,42 @@ func Unstash(conf *StashConfig, defaultThing any) error {
 	if conf.Key == "" {
 		return ErrEmptyKey
 	}
+	if conf.File == "" && conf.Reader == nil {
+		return ErrMissingReader
+	}
 
-	a, err := NewAnyStore(&Options{
-		EnablePersistence: true,
-		PersistenceFile:   conf.File,
-		EncryptionKey:     conf.EncryptionKey,
-	})
+	options := Options{
+		PersistenceFile: conf.File,
+		EncryptionKey:   conf.EncryptionKey,
+	}
+	if conf.Reader != nil {
+		options.EnablePersistence = false
+	}
+
+	a, err := NewAnyStore(&options)
 	if err != nil {
 		return err
 	}
-	gobbedThing, err := a.Load(conf.Key)
-	if err != nil {
-		return err
+
+	var gobbedThing any
+	if conf.Reader != nil {
+		data, err := io.ReadAll(conf.Reader)
+		if err != nil {
+			return err
+		}
+		decrypted, err := Decrypt(a.GetEncryptionKeyBytes(), data)
+		if err != nil {
+			return err
+		}
+		gobbedThing = decrypted
+	} else {
+		var err error
+		gobbedThing, err = a.Load(conf.Key)
+		if err != nil {
+			return err
+		}
 	}
+
 	thing, ok := gobbedThing.([]byte)
 	if !ok {
 		if defaultThing != nil {

@@ -172,6 +172,9 @@ type AnyStore interface {
 
 	SetEncryptionKey(key string) (AnyStore, error)
 
+	// GetEncryptionKeyBytes returns a byte slice with the AES encryption key.
+	GetEncryptionKeyBytes() []byte
+
 	// HasKey tests if key exists in the store, returns true if it does, false if
 	// not. Retrieval is atomic.
 	HasKey(key any) bool
@@ -214,7 +217,7 @@ type AnyStore interface {
 }
 
 type Options struct {
-	// Store and load the AnyStore from file? Set to true
+	// Store and load the AnyStore from file or io.ReadWriter? Set to true
 	EnablePersistence bool
 	// Can start with tilde for HOME resolution, will do os.MkdirAll on directory
 	// path. Omit to use DefaultPersistenceFile
@@ -334,6 +337,10 @@ func (a *anyStore) SetEncryptionKey(key string) (AnyStore, error) {
 	}
 	a.key.Store(binkey)
 	return a, nil
+}
+
+func (a *anyStore) GetEncryptionKeyBytes() []byte {
+	return a.key.Load().([]byte)
 }
 
 func (a *anyStore) HasKey(key any) bool {
@@ -619,6 +626,10 @@ func (u *unsafeAnyStore) SetEncryptionKey(key string) (AnyStore, error) {
 	}
 	u.key.Store(binkey)
 	return u, nil
+}
+
+func (u *unsafeAnyStore) GetEncryptionKeyBytes() []byte {
+	return u.key.Load().([]byte)
 }
 
 func (u *unsafeAnyStore) HasKey(key any) bool {

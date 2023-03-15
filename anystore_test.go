@@ -1,6 +1,7 @@
 package anystore_test
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -164,6 +165,21 @@ func TestAnyStore_Run(t *testing.T) {
 	if nilVal != nil {
 		t.Errorf("expected nil, but got %T", nilVal)
 	}
+}
+
+func TestAnyStore_GetEncryptionKeyBytes(t *testing.T) {
+	var expected []byte
+	if _, err := base64.RawStdEncoding.Decode(expected, []byte(anystore.DefaultEncryptionKey)); err != nil {
+		t.Fatal(err)
+	}
+	a, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBytes := a.GetEncryptionKeyBytes()
+
 }
 
 func ExampleAnyStore_Store_encrypt() {

@@ -79,7 +79,60 @@ func main() {
 }
 ```
 
-You can generate a random AES-256 base64-encoded encryption key using...
+The `Stash` and `Unstash` functions also support `io.Reader` and `io.Writer`
+(`io.WriteCloser`). `Stash` will write to both a file and `io.Writer` if
+configured with both via the `anystore.StashConfig` struct. `Unstash` will
+prefer `io.Reader` over file if both are provided. `Unstash` will successfully
+unstash from the `os.File` `io.Reader` of
+`os.Open(previously_stashed_file_by_Stash)`.
+
+Example with only reader and writer...
+
+```go
+greeting := "Hello world"
+var receivedGreeting string
+
+reader, writer := io.Pipe()
+defer reader.Close() // Stash closes the writer, it's an io.ReadCloser
+
+errch := make(chan error)
+
+go func() {
+  defer close(errch)
+  if err := anystore.Unstash(&anystore.StashConfig{
+    Reader: reader,
+    Key:    "secret",
+    Thing:  &receivedGreeting,
+  }, nil); err != nil {
+    errch <- err
+  }
+  errch <- nil
+}()
+
+if err := anystore.Stash(&anystore.StashConfig{
+  Writer: writer,
+  Key:    "secret",
+  Thing:  &greeting,
+}); err != nil {
+  log.Fatal(err)
+}
+
+err := <-errch
+if err != nil {
+  log.Fatal(err)
+}
+
+fmt.Println(receivedGreeting)
+```
+
+
+
+## Encrypted by default
+
+There is a default encryption key constant (`anystore.DefaultEncryptionKey`)
+that will be used if no user-defined key is provided. It is obviously not secure
+to use the default asymmetric key as it is publicly known. You can generate your
+own random AES-256 base64-encoded encryption key using `./cmd/newkey`...
 
 ```sh
 go run github.com/sa6mwa/anystore/cmd/newkey
@@ -88,7 +141,7 @@ go run github.com/sa6mwa/anystore/cmd/newkey
 ## Persistence, not performance
 
 The persistence-feature is not designed for performance, but for simplicity,
-durability and concurrent access by multiple processes/instances. The entire
+durability, and concurrent access by multiple processes/instances. The entire
 key/value store (`map[any]any`) is loaded and persisted on retrieving or storing
 every key/value pair making it slow with many keys (can be sharded manually
 by managing several AnyStores).

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"reflect"
 	"testing"
@@ -350,4 +351,44 @@ func TestUnstash(t *testing.T) {
 	} else {
 		t.Error("expected anystore.ErrThingNotFound")
 	}
+}
+
+func ExampleStash_reader_writer() {
+	greeting := "Hello world"
+	var receivedGreeting string
+
+	reader, writer := io.Pipe()
+	defer reader.Close() // Stash closes the writer, it's an io.ReadCloser
+
+	errch := make(chan error)
+
+	go func() {
+		defer close(errch)
+		if err := anystore.Unstash(&anystore.StashConfig{
+			Reader: reader,
+			Key:    "secret",
+			Thing:  &receivedGreeting,
+		}, nil); err != nil {
+			errch <- err
+		}
+		errch <- nil
+	}()
+
+	if err := anystore.Stash(&anystore.StashConfig{
+		Writer: writer,
+		Key:    "secret",
+		Thing:  &greeting,
+	}); err != nil {
+		log.Fatal(err)
+	}
+
+	err := <-errch
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(receivedGreeting)
+
+	// Output:
+	// Hello world
 }

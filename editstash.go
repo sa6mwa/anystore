@@ -23,12 +23,12 @@ var (
 	ErrNotATerminal  error = errors.New("os.Stdin is not a terminal")
 )
 
-func EditThing(conf *StashConfig, defaultThing any) error {
+func EditThing(conf *StashConfig) error {
 	if !IsUnixTerminal(os.Stdin) {
 		return ErrNotATerminal
 	}
 
-	if err := Unstash(conf, defaultThing); err != nil {
+	if err := Unstash(conf); err != nil {
 		return err
 	}
 

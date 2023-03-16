@@ -19,6 +19,8 @@ type Component struct {
 }
 
 func main() {
+	log.SetFlags(log.Ldate | log.Ltime | log.LUTC | log.Lshortfile)
+
 	thingToEdit := &Thing{
 		Name:        &[]string{"Hello World"}[0],
 		Number:      32,
@@ -42,10 +44,12 @@ func main() {
 
 	if err := anystore.EditThing(&anystore.StashConfig{
 		File:          file,
+		GZip:          true,
 		EncryptionKey: anystore.DefaultEncryptionKey,
 		Key:           "configuration",
 		Thing:         thingToEdit,
-	}, defaultThing); err != nil {
+		DefaultThing:  defaultThing,
+	}); err != nil {
 		log.Fatal(err)
 	}
 
@@ -53,10 +57,11 @@ func main() {
 
 	if err := anystore.Unstash(&anystore.StashConfig{
 		File:          file,
+		GZip:          true,
 		EncryptionKey: anystore.DefaultEncryptionKey,
 		Key:           "configuration",
 		Thing:         &gotThing,
-	}, nil); err != nil {
+	}); err != nil {
 		log.Fatal(err)
 	}
 

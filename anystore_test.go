@@ -96,6 +96,233 @@ func TestAnyStore_Run_persisted(t *testing.T) {
 	}
 }
 
+func TestAnyStore_Run_persisted_gzip(t *testing.T) {
+	f, err := os.CreateTemp("", "anystore-test-run-gzip-*")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	tempfile := f.Name()
+	f.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+
+	errTesting := errors.New("this error")
+	a, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence:   true,
+		PersistenceFile:     tempfile,
+		GZipPersistenceFile: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Store("hello", "world"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.HasKey("hello") {
+		t.Fatal("expected key not found in store (outside of Run)")
+	}
+
+	err = a.Run(func(as anystore.AnyStore) error {
+		// Test SetPersistenceFile aswell, if not just for coverage...
+		if _, err := as.SetPersistenceFile(tempfile); err != nil {
+			t.Error(err)
+		}
+		// Cover SetEncryptionKey aswell...
+		if _, err := as.SetEncryptionKey(anystore.DefaultEncryptionKey); err != nil {
+			t.Error(err)
+		}
+		lenKeys, err := as.Keys()
+		if err != nil {
+			t.Error(err)
+		}
+		if len(lenKeys) == 0 {
+			t.Errorf("expected more than zero keys")
+		}
+
+		if !as.HasKey("hello") {
+			t.Error("expected key not found in store")
+		}
+		if err := as.Store(struct{}{}, "okilidokili"); err != nil {
+			t.Fatal(err)
+		}
+		val, err := as.Load(struct{}{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, ok := val.(string)
+		if !ok {
+			t.Fatalf("expected key \"struct{}{}\" with value of type string not found in store")
+		}
+		if v != "okilidokili" {
+			t.Errorf("expected okilidokili, but got %q", v)
+		}
+
+		if l, err := as.Len(); err != nil {
+			t.Fatal(err)
+		} else if l != 2 {
+			t.Errorf("expected Len() == %d, got %d", 2, l)
+		}
+		as.Store(struct{}{}, "completely")
+		as.Store(struct{}{}, "different")
+		as.Delete(struct{}{})
+		if l, err := as.Len(); err != nil {
+			t.Fatal(err)
+		} else if l != 1 {
+			t.Errorf("expected Len() == %d, got %d", 2, l)
+		}
+		if err := as.Store(struct{}{}, "okilidokili"); err != nil {
+			t.Fatal(err)
+		}
+		return errTesting
+	})
+	if err != errTesting {
+		t.Errorf("expected error %v, but got %v", errTesting, err)
+	}
+	o, err := a.Load(struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := "okilidokili"
+	if o != expected {
+		t.Fatalf("expected key %q with value %q not found in store", "struct{}{}", expected)
+	}
+	nilVal, err := a.Load("keyNotPresent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nilVal != nil {
+		t.Errorf("expected nil, but got %T", nilVal)
+	}
+}
+
+func TestAnyStore_Delete(t *testing.T) {
+	a, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Store("hello", "world"); err != nil {
+		t.Error(err)
+	}
+	if err := a.Store("hola", "mundo"); err != nil {
+		t.Error(err)
+	}
+	if keys, err := a.Keys(); err != nil {
+		t.Error(err)
+	} else if len(keys) != 2 {
+		t.Errorf("expected 2 keys, got %d", len(keys))
+	}
+	if err := a.Delete("hello"); err != nil {
+		t.Error(err)
+	}
+	if keys, err := a.Keys(); err != nil {
+		t.Error(err)
+	} else if len(keys) != 1 {
+		t.Errorf("expected 1 key, got %d", len(keys))
+	}
+}
+
+func TestAnyStore_Delete_persisted(t *testing.T) {
+	fl, err := os.CreateTemp("", "anystore-test-delete-*")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	tempfile := fl.Name()
+	fl.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+	a, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence: true,
+		PersistenceFile:   tempfile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Store("hello", "world"); err != nil {
+		t.Error(err)
+	}
+	if err := a.Store("hola", "mundo"); err != nil {
+		t.Error(err)
+	}
+	if keys, err := a.Keys(); err != nil {
+		t.Error(err)
+	} else if len(keys) != 2 {
+		t.Errorf("expected 2 keys, got %d", len(keys))
+	}
+	if err := a.Delete("hello"); err != nil {
+		t.Error(err)
+	}
+	if keys, err := a.Keys(); err != nil {
+		t.Error(err)
+	} else if len(keys) != 1 {
+		t.Errorf("expected 1 key, got %d", len(keys))
+	}
+	fi, err := os.Stat(tempfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() == 0 {
+		t.Errorf("test store %q is of 0 size, expected more", tempfile)
+	}
+}
+
+func TestAnyStore_Delete_persisted_gzipped(t *testing.T) {
+	fl, err := os.CreateTemp("", "anystore-test-delete-gzip-*")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	tempfile := fl.Name()
+	fl.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+	secret := anystore.NewKey()
+	a, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence:   true,
+		PersistenceFile:     tempfile,
+		GZipPersistenceFile: true,
+		EncryptionKey:       secret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Store("hello", "world"); err != nil {
+		t.Error(err)
+	}
+	if err := a.Store("hola", "mundo"); err != nil {
+		t.Error(err)
+	}
+	if keys, err := a.Keys(); err != nil {
+		t.Error(err)
+	} else if len(keys) != 2 {
+		t.Errorf("expected 2 keys, got %d", len(keys))
+	}
+	if err := a.Delete("hello"); err != nil {
+		t.Error(err)
+	}
+	if keys, err := a.Keys(); err != nil {
+		t.Error(err)
+	} else if len(keys) != 1 {
+		t.Errorf("expected 1 key, got %d", len(keys))
+	}
+	fi, err := os.Stat(tempfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() == 0 {
+		t.Errorf("test store %q is of 0 size, expected more", tempfile)
+	}
+}
+
 func TestAnyStore_Run(t *testing.T) {
 	errTesting := errors.New("this error")
 	a, err := anystore.NewAnyStore(&anystore.Options{
@@ -182,6 +409,28 @@ func TestAnyStore_GetEncryptionKeyBytes(t *testing.T) {
 	obtained := a.GetEncryptionKeyBytes()
 	if !bytes.Equal(expected, obtained) {
 		t.Error("obtained bytes from AnyStore.GetEncryptionKeyBytes() and expected bytes do not match")
+	}
+}
+
+func TestAnyStore_GetEncryptionKeyBytes_unsafe(t *testing.T) {
+	expected, err := base64.RawStdEncoding.DecodeString(anystore.DefaultEncryptionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Run(func(s anystore.AnyStore) error {
+		obtained := s.GetEncryptionKeyBytes()
+		if !bytes.Equal(expected, obtained) {
+			t.Error("obtained bytes from AnyStore.GetEncryptionKeyBytes() and expected bytes do not match")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -286,6 +535,47 @@ func BenchmarkStoreAndLoadPersistence(b *testing.B) {
 	}
 }
 
+func BenchmarkStoreAndLoadGZippedPersistence(b *testing.B) {
+	f, err := os.CreateTemp("", "anystore-benchmark-*")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	tempfile := f.Name()
+	f.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+
+	a, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence:   true,
+		GZipPersistenceFile: true,
+		PersistenceFile:     tempfile,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for i := 0; i < b.N; i++ {
+		value := fmt.Sprintf("%s-%d", b.Name(), b.N)
+		if err := a.Store(b.N, value); err != nil {
+			b.Fatal(err)
+		}
+		if v, err := a.Load(b.N); err != nil {
+			b.Fatal(err)
+		} else {
+			val, ok := v.(string)
+			if !ok {
+				b.Fatal("value is not a string")
+			}
+			if val != value {
+				b.Fatal("value does not match expected string")
+			}
+		}
+	}
+}
+
 func BenchmarkStoreAndLoad(b *testing.B) {
 	a, err := anystore.NewAnyStore(&anystore.Options{
 		EnablePersistence: false,
@@ -315,9 +605,9 @@ func BenchmarkStoreAndLoad(b *testing.B) {
 
 func FuzzConcurrentPersistence(f *testing.F) {
 
-	f.Add(1, "hello world")
+	f.Add(1, false, "hello world")
 
-	f.Fuzz(func(t *testing.T, count int, valueToStore string) {
+	f.Fuzz(func(t *testing.T, count int, gzip bool, valueToStore string) {
 		file, err := os.CreateTemp("", "anystore-concurrent-fuzz-*")
 		if err != nil {
 			fmt.Println(err)
@@ -336,8 +626,9 @@ func FuzzConcurrentPersistence(f *testing.F) {
 		go func() {
 			defer close(ch1)
 			one, err := anystore.NewAnyStore(&anystore.Options{
-				EnablePersistence: true,
-				PersistenceFile:   tempfile,
+				EnablePersistence:   true,
+				PersistenceFile:     tempfile,
+				GZipPersistenceFile: gzip,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -365,8 +656,9 @@ func FuzzConcurrentPersistence(f *testing.F) {
 		go func() {
 			defer close(ch2)
 			two, err := anystore.NewAnyStore(&anystore.Options{
-				EnablePersistence: true,
-				PersistenceFile:   tempfile,
+				EnablePersistence:   true,
+				PersistenceFile:     tempfile,
+				GZipPersistenceFile: gzip,
 			})
 			if err != nil {
 				t.Fatal(err)

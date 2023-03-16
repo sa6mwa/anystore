@@ -1,9 +1,9 @@
 ## github.com/sa6mwa/anystore
 
 AnyStore is a Go thread-safe key/value store featuring optional mutex-style
-encrypted persistence for shared access from one or more instance(s). The
-persistence feature requires a system (file and operating system) supporting
-`syscall.Flock` (Linux, BSD, Darwin, NFSv4, etc).
+encrypted (and optionally gzipped) persistence for shared access from one or
+more instance(s). The persistence feature requires a system (file and operating
+system) supporting `syscall.Flock` (Linux, BSD, Darwin, NFSv4, etc).
 
 AnyStore also feature a configuration mode with convenience-functions `Stash`,
 `Unstash` and `EditThing`. Whether you choose to hard-code an encryption key in
@@ -55,7 +55,8 @@ func main() {
 		EncryptionKey: anystore.DefaultEncryptionKey,
 		Key:           "configuration",
 		Thing:         &configuration,
-	}, defaultConf); err != nil {
+		DefaultThing:  defaultConf,
+	}); err != nil {
 		log.Fatal(err)
 	}
 
@@ -65,8 +66,9 @@ func main() {
 			EncryptionKey: anystore.DefaultEncryptionKey,
 			Key:           "configuration",
 			Thing:         &configuration,
+			DefaultThing:  defaultConf,
 			// Editor: "/usr/bin/emacs",
-		}, defaultConf); err != nil {
+		}); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -84,7 +86,7 @@ The `Stash` and `Unstash` functions also support `io.Reader` and `io.Writer`
 configured with both via the `anystore.StashConfig` struct. `Unstash` will
 prefer `io.Reader` over file if both are provided. `Unstash` will successfully
 unstash from the `os.File` `io.Reader` of
-`os.Open(previously_stashed_file_by_Stash)`.
+`os.Open(previously_Stashed_file)`.
 
 Example with only reader and writer...
 
@@ -101,9 +103,10 @@ go func() {
   defer close(errch)
   if err := anystore.Unstash(&anystore.StashConfig{
     Reader: reader,
+		GZip:   true,
     Key:    "secret",
     Thing:  &receivedGreeting,
-  }, nil); err != nil {
+  }); err != nil {
     errch <- err
   }
   errch <- nil
@@ -111,6 +114,7 @@ go func() {
 
 if err := anystore.Stash(&anystore.StashConfig{
   Writer: writer,
+	GZip:   true,
   Key:    "secret",
   Thing:  &greeting,
 }); err != nil {
@@ -124,8 +128,6 @@ if err != nil {
 
 fmt.Println(receivedGreeting)
 ```
-
-
 
 ## Encrypted by default
 
@@ -154,23 +156,31 @@ rename has completed successfully. On load, the lock on the lockfile is not
 acquired - the operation relies on the atomic nature of `rename`.
 
 ```
-$ go test -bench=. -run='^#' -count=5
+$ go test -v -run=^# -bench=. -count=5
 goos: linux
 goarch: amd64
 pkg: github.com/sa6mwa/anystore
 cpu: AMD A8-3870 APU with Radeon(tm) HD Graphics
-BenchmarkStoreAndLoadPersistence-4            28          40328319 ns/op
-BenchmarkStoreAndLoadPersistence-4            30          41765093 ns/op
-BenchmarkStoreAndLoadPersistence-4            30          40365892 ns/op
-BenchmarkStoreAndLoadPersistence-4            30          42452397 ns/op
-BenchmarkStoreAndLoadPersistence-4            33          40912477 ns/op
-BenchmarkStoreAndLoad-4                   386727              3453 ns/op
-BenchmarkStoreAndLoad-4                   374486              3328 ns/op
-BenchmarkStoreAndLoad-4                   348756              3503 ns/op
-BenchmarkStoreAndLoad-4                   405081              3678 ns/op
-BenchmarkStoreAndLoad-4                   331292              3680 ns/op
+BenchmarkStoreAndLoadPersistence
+BenchmarkStoreAndLoadPersistence-4                    28          42331426 ns/op
+BenchmarkStoreAndLoadPersistence-4                    37          41519115 ns/op
+BenchmarkStoreAndLoadPersistence-4                    30          42562259 ns/op
+BenchmarkStoreAndLoadPersistence-4                    30          40343840 ns/op
+BenchmarkStoreAndLoadPersistence-4                    30          40650118 ns/op
+BenchmarkStoreAndLoadGZippedPersistence
+BenchmarkStoreAndLoadGZippedPersistence-4             38          40602983 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             38          40317412 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             28          43019740 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             30          44645946 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             30          40907386 ns/op
+BenchmarkStoreAndLoad
+BenchmarkStoreAndLoad-4                           399135              3381 ns/op
+BenchmarkStoreAndLoad-4                           370418              3428 ns/op
+BenchmarkStoreAndLoad-4                           365362              3177 ns/op
+BenchmarkStoreAndLoad-4                           383518              3351 ns/op
+BenchmarkStoreAndLoad-4                           926636              2982 ns/op
 PASS
-ok      github.com/sa6mwa/anystore      17.826s
+ok      github.com/sa6mwa/anystore      26.854s
 ```
 
 ## Fuzzing

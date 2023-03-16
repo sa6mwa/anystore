@@ -42,10 +42,12 @@ func main() {
 
 	if err := anystore.EditThing(&anystore.StashConfig{
 		File:          file,
+		GZip:          true,
 		EncryptionKey: anystore.DefaultEncryptionKey,
 		Key:           "configuration",
 		Thing:         thingToEdit,
-	}, defaultThing); err != nil {
+		DefaultThing:  defaultThing,
+	}); err != nil {
 		log.Fatal(err)
 	}
 
@@ -53,10 +55,11 @@ func main() {
 
 	if err := anystore.Unstash(&anystore.StashConfig{
 		File:          file,
+		GZip:          true,
 		EncryptionKey: anystore.DefaultEncryptionKey,
 		Key:           "configuration",
 		Thing:         &gotThing,
-	}, nil); err != nil {
+	}); err != nil {
 		log.Fatal(err)
 	}
 

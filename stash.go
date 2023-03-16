@@ -2,6 +2,7 @@ package anystore
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -31,9 +32,11 @@ type StashConfig struct {
 	File          string         // AnyStore DB file, if empty, use Reader/Writer
 	Reader        io.Reader      // If nil, use File for Unstash, if not, prefer Reader over File
 	Writer        io.WriteCloser // If nil, use File for Stash, if not, write to both Writer and File (if File is not an empty string)
+	GZip          bool           // GZip data before encryption
 	EncryptionKey string         // 16, 24 or 32 byte long base64-encoded string
 	Key           string         // Key name where to store Thing
 	Thing         any            // Usually a struct with data, properties, configuration, etc
+	DefaultThing  any            // If Unstash get os.ErrNotExist or key is missing, use this as default Thing if not nil
 	Editor        string         // Editor to use to edit Thing as JSON
 }
 
@@ -56,7 +59,7 @@ type StashConfig struct {
 // written to). Writer.Close() is deferred early, Stash always closes the writer
 // on success and failure. If File is an empty string (== "") and Writer is not
 // nil, Stash will only write to the io.Writer.
-func Unstash(conf *StashConfig, defaultThing any) error {
+func Unstash(conf *StashConfig) error {
 	if conf.Thing == nil {
 		return ErrNilThing
 	}
@@ -67,9 +70,10 @@ func Unstash(conf *StashConfig, defaultThing any) error {
 		return ErrMissingReader
 	}
 	options := Options{
-		EnablePersistence: true,
-		PersistenceFile:   conf.File,
-		EncryptionKey:     conf.EncryptionKey,
+		EnablePersistence:   true,
+		PersistenceFile:     conf.File,
+		GZipPersistenceFile: conf.GZip,
+		EncryptionKey:       conf.EncryptionKey,
 	}
 	// If we have an io.Reader, prefer it above File.
 	if conf.Reader != nil {
@@ -91,7 +95,16 @@ func Unstash(conf *StashConfig, defaultThing any) error {
 		if err != nil {
 			return err
 		}
-		in := gob.NewDecoder(bytes.NewReader(decrypted))
+		var in *gob.Decoder
+		if conf.GZip {
+			gzipReader, err := gzip.NewReader(bytes.NewReader(decrypted))
+			if err != nil {
+				return err
+			}
+			in = gob.NewDecoder(gzipReader)
+		} else {
+			in = gob.NewDecoder(bytes.NewReader(decrypted))
+		}
 		if err := in.Decode(&kv); err != nil {
 			return err
 		}
@@ -111,14 +124,14 @@ func Unstash(conf *StashConfig, defaultThing any) error {
 	// GOB encoded thing came from either file or io.Reader.
 	thing, ok := gobbedThing.([]byte)
 	if !ok {
-		if defaultThing != nil {
-			if reflect.TypeOf(conf.Thing) != reflect.TypeOf(defaultThing) {
-				return fmt.Errorf("%w: %s != %s", ErrTypeMismatch, reflect.TypeOf(defaultThing), reflect.TypeOf(conf.Thing))
+		if conf.DefaultThing != nil {
+			if reflect.TypeOf(conf.Thing) != reflect.TypeOf(conf.DefaultThing) {
+				return fmt.Errorf("%w: %s != %s", ErrTypeMismatch, reflect.TypeOf(conf.DefaultThing), reflect.TypeOf(conf.Thing))
 			}
-			if reflect.TypeOf(conf.Thing).Kind() != reflect.Pointer || reflect.TypeOf(defaultThing).Kind() != reflect.Pointer {
+			if reflect.TypeOf(conf.Thing).Kind() != reflect.Pointer || reflect.TypeOf(conf.DefaultThing).Kind() != reflect.Pointer {
 				return ErrNotAPointer
 			}
-			reflect.Indirect(reflect.ValueOf(conf.Thing)).Set(reflect.Indirect(reflect.ValueOf(defaultThing)))
+			reflect.Indirect(reflect.ValueOf(conf.Thing)).Set(reflect.Indirect(reflect.ValueOf(conf.DefaultThing)))
 			return nil
 		}
 		return ErrThingNotFound
@@ -168,8 +181,9 @@ func Stash(conf *StashConfig) error {
 	}
 
 	options := Options{
-		PersistenceFile: conf.File,
-		EncryptionKey:   conf.EncryptionKey,
+		PersistenceFile:     conf.File,
+		GZipPersistenceFile: conf.GZip,
+		EncryptionKey:       conf.EncryptionKey,
 	}
 	if conf.File == "" {
 		options.EnablePersistence = false
@@ -201,12 +215,25 @@ func Stash(conf *StashConfig) error {
 	if conf.Writer != nil {
 		kv := make(anyMap)
 		kv[conf.Key] = thing.Bytes()
-		var gobOutput bytes.Buffer
-		out := gob.NewEncoder(&gobOutput)
+		var output bytes.Buffer
+		var out *gob.Encoder
+		var gzipWriter *gzip.Writer
+		if conf.GZip {
+			gzipWriter = gzip.NewWriter(&output)
+			out = gob.NewEncoder(gzipWriter)
+		} else {
+			out = gob.NewEncoder(&output)
+		}
 		if err := out.Encode(kv); err != nil {
+			if gzipWriter != nil {
+				gzipWriter.Close()
+			}
 			return err
 		}
-		encrypted, err := Encrypt(a.GetEncryptionKeyBytes(), gobOutput.Bytes())
+		if gzipWriter != nil {
+			gzipWriter.Close()
+		}
+		encrypted, err := Encrypt(a.GetEncryptionKeyBytes(), output.Bytes())
 		if err != nil {
 			return err
 		}
@@ -217,4 +244,25 @@ func Stash(conf *StashConfig) error {
 		}
 	}
 	return nil
+}
+
+// Wrap bytes.Buffer to implement io.Closer
+type BytesBufferWriteCloser struct {
+	bytes.Buffer
+}
+
+// Close implements io.Closer on wrapped bytes.Buffer
+func (bbwc *BytesBufferWriteCloser) Close() error {
+	return nil
+}
+
+// NewStashReader first Stashes according to supplied StashConfig with the e
+overwrites the Writer field pointing to an internal bytes.Buffer.
+func NewStashReader(conf *StashConfig) (*BytesBufferWriteCloser, error) {
+	var buf BytesBufferWriteCloser
+	conf.Writer = &buf
+	if err := Stash(conf); err != nil {
+		return nil, err
+	}
+	return &buf, nil
 }

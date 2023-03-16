@@ -1,3 +1,0 @@
-go test fuzz v1
-int(12)
-string("hel|o worl\x7f")

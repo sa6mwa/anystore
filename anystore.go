@@ -133,6 +133,7 @@ package anystore
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -225,12 +226,16 @@ type Options struct {
 	// 16, 24 or 32 byte base64-encoded string (omit to use the default key ==
 	// insecure)
 	EncryptionKey string
+	// If true, the serialized output (GOB) will be gzipped before encrypted and
+	// saved to disk and vice versa for loading from the persistence.
+	GZipPersistenceFile bool
 }
 
 type anyStore struct {
 	mutex    sync.Mutex
 	kv       atomic.Value
 	persist  atomic.Bool
+	gzip     atomic.Bool
 	key      atomic.Value
 	savefile atomic.Value
 }
@@ -268,6 +273,11 @@ func NewAnyStore(o *Options) (AnyStore, error) {
 		a.persist.Store(true)
 	} else {
 		a.persist.Store(false)
+	}
+	if o.GZipPersistenceFile {
+		a.gzip.Store(true)
+	} else {
+		a.gzip.Store(false)
 	}
 	if o.EncryptionKey != "" {
 		if _, err := a.SetEncryptionKey(o.EncryptionKey); err != nil {
@@ -473,7 +483,16 @@ func (a *anyStore) load() error {
 			return err
 		}
 		if len(decrypted) > 0 {
-			in := gob.NewDecoder(bytes.NewReader(decrypted))
+			var in *gob.Decoder
+			if a.gzip.Load() {
+				gzipReader, err := gzip.NewReader(bytes.NewReader(decrypted))
+				if err != nil {
+					return err
+				}
+				in = gob.NewDecoder(gzipReader)
+			} else {
+				in = gob.NewDecoder(bytes.NewReader(decrypted))
+			}
 			if err := in.Decode(&kvN); err != nil {
 				return err
 			}
@@ -516,7 +535,16 @@ func (a *anyStore) loadStoreAndSave(key any, value any, remove bool) error {
 			return err
 		}
 		if len(decrypted) > 0 {
-			in := gob.NewDecoder(bytes.NewReader(decrypted))
+			var in *gob.Decoder
+			if a.gzip.Load() {
+				gzipReader, err := gzip.NewReader(bytes.NewReader(decrypted))
+				if err != nil {
+					return err
+				}
+				in = gob.NewDecoder(gzipReader)
+			} else {
+				in = gob.NewDecoder(bytes.NewReader(decrypted))
+			}
 			if err := in.Decode(&kvN); err != nil {
 				return err
 			}
@@ -533,12 +561,25 @@ func (a *anyStore) loadStoreAndSave(key any, value any, remove bool) error {
 	// Store as GOB, encrypt it and save as temporary file along-side the original
 	// and replace the main file via rename (as rename is atomic, it will not
 	// corrupt the main file in the event of a crash).
-	var gobOutput bytes.Buffer
-	out := gob.NewEncoder(&gobOutput)
+	var output bytes.Buffer
+	var out *gob.Encoder
+	var gzipWriter *gzip.Writer
+	if a.gzip.Load() {
+		gzipWriter = gzip.NewWriter(&output)
+		out = gob.NewEncoder(gzipWriter)
+	} else {
+		out = gob.NewEncoder(&output)
+	}
 	if err := out.Encode(kvN); err != nil {
+		if gzipWriter != nil {
+			gzipWriter.Close()
+		}
 		return err
 	}
-	encryptedOutput, err := Encrypt(encryptionKey, gobOutput.Bytes())
+	if gzipWriter != nil {
+		gzipWriter.Close()
+	}
+	encryptedOutput, err := Encrypt(encryptionKey, output.Bytes())
 	if err != nil {
 		return err
 	}

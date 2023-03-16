@@ -28,7 +28,7 @@ func strptr(s string) *string {
 	return &s
 }
 
-func doStash(file string, writer io.WriteCloser, encryptionKey string) error {
+func doStash(file string, writer io.WriteCloser, gzip bool, encryptionKey string) error {
 	expectedThing := &Thing{
 		Name:        strptr("Hello World"),
 		Number:      32,
@@ -46,6 +46,7 @@ func doStash(file string, writer io.WriteCloser, encryptionKey string) error {
 		Key:           "configuration",
 		Thing:         expectedThing,
 		Writer:        writer,
+		GZip:          gzip,
 	}
 
 	if err := anystore.Stash(&stashconf); err != nil {
@@ -54,7 +55,7 @@ func doStash(file string, writer io.WriteCloser, encryptionKey string) error {
 	return nil
 }
 
-func doUnstash(file string, reader io.Reader, encryptionKey string) (Thing, error) {
+func doUnstash(file string, reader io.Reader, gzip bool, encryptionKey string) (Thing, error) {
 	var gotThing Thing
 
 	if err := anystore.Unstash(&anystore.StashConfig{
@@ -63,13 +64,14 @@ func doUnstash(file string, reader io.Reader, encryptionKey string) (Thing, erro
 		Key:           "configuration",
 		Thing:         &gotThing,
 		Reader:        reader,
-	}, nil); err != nil {
+		GZip:          gzip,
+	}); err != nil {
 		return Thing{}, err
 	}
 	return gotThing, nil
 }
 
-func doUnstashDefault(file string, reader io.Reader, encryptionKey string) (Thing, error) {
+func doUnstashDefault(file string, reader io.Reader, gzip bool, encryptionKey string) (Thing, error) {
 	defaultThing := &Thing{
 		Name:        strptr("Hello World"),
 		Number:      32,
@@ -86,8 +88,10 @@ func doUnstashDefault(file string, reader io.Reader, encryptionKey string) (Thin
 		EncryptionKey: encryptionKey,
 		Key:           "key_not_in_stash",
 		Thing:         &gotThing,
+		DefaultThing:  defaultThing,
 		Reader:        reader,
-	}, defaultThing); err != nil {
+		GZip:          gzip,
+	}); err != nil {
 		return Thing{}, err
 	}
 	return gotThing, nil
@@ -134,7 +138,7 @@ func TestUnstash_stashAndUnstash(t *testing.T) {
 		EncryptionKey: secret,
 		Key:           "configuration",
 		Thing:         &gotThing,
-	}, nil); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -155,7 +159,8 @@ func TestUnstash_stashAndUnstash(t *testing.T) {
 		EncryptionKey: secret,
 		Key:           "key_that_does_not_exist",
 		Thing:         &gotThing,
-	}, defaultThing); err != nil {
+		DefaultThing:  defaultThing,
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -186,10 +191,44 @@ func TestStash(t *testing.T) {
 			{ID: 3, Name: "Component three"},
 		},
 	}
-	if err := doStash(tempfile, nil, secret); err != nil {
+	if err := doStash(tempfile, nil, false, secret); err != nil {
 		t.Fatal(err)
 	}
-	gotThing, err := doUnstash(tempfile, nil, secret)
+	gotThing, err := doUnstash(tempfile, nil, false, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&gotThing, expectedThing) {
+		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
+	}
+}
+
+func TestStash_gzip(t *testing.T) {
+	secret := anystore.NewKey()
+	fl, err := os.CreateTemp("", "anystore-stash-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempfile := fl.Name()
+	fl.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+	expectedThing := &Thing{
+		Name:        strptr("Hello World"),
+		Number:      32,
+		Description: "There is not much to a Hello World thing.",
+		Components: []*Component{
+			{ID: 1, Name: "Component one"},
+			{ID: 2, Name: "Component two"},
+			{ID: 3, Name: "Component three"},
+		},
+	}
+	if err := doStash(tempfile, nil, true, secret); err != nil {
+		t.Fatal(err)
+	}
+	gotThing, err := doUnstash(tempfile, nil, true, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +266,7 @@ func TestStash_doublestash(t *testing.T) {
 	errch := make(chan error)
 	go func() {
 		defer close(errch)
-		gt, err := doUnstash("", reader, secret)
+		gt, err := doUnstash("", reader, false, secret)
 		if err != nil {
 			errch <- err
 			return
@@ -238,7 +277,7 @@ func TestStash_doublestash(t *testing.T) {
 		}
 		errch <- nil
 	}()
-	if err := doStash(tempfile, writer, secret); err != nil {
+	if err := doStash(tempfile, writer, false, secret); err != nil {
 		t.Fatal(err)
 	}
 	err = <-errch
@@ -246,7 +285,7 @@ func TestStash_doublestash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotThing, err := doUnstash(tempfile, nil, secret)
+	gotThing, err := doUnstash(tempfile, nil, false, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,17 +316,17 @@ func TestUnstash(t *testing.T) {
 			{ID: 3, Name: "Component three"},
 		},
 	}
-	if err := doStash(tempfile, nil, secret); err != nil {
+	if err := doStash(tempfile, nil, false, secret); err != nil {
 		t.Fatal(err)
 	}
-	gotThing, err := doUnstash(tempfile, nil, secret)
+	gotThing, err := doUnstash(tempfile, nil, false, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(&gotThing, expectedThing) {
 		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
 	}
-	gotThing, err = doUnstashDefault(tempfile, nil, secret)
+	gotThing, err = doUnstashDefault(tempfile, nil, false, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,14 +335,14 @@ func TestUnstash(t *testing.T) {
 	}
 
 	// Test io.Reader, should be the same as the expectedThing
-	if err := doStash(tempfile, nil, secret); err != nil {
+	if err := doStash(tempfile, nil, false, secret); err != nil {
 		t.Fatal(err)
 	}
 	tf, err := os.Open(tempfile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotThing, err = doUnstash("", tf, secret)
+	gotThing, err = doUnstash("", tf, false, secret)
 	tf.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -318,7 +357,7 @@ func TestUnstash(t *testing.T) {
 	errch := make(chan error)
 	go func() {
 		defer close(errch)
-		gt, err := doUnstash("", reader, secret)
+		gt, err := doUnstash("", reader, false, secret)
 		if err != nil {
 			errch <- err
 			return
@@ -329,7 +368,7 @@ func TestUnstash(t *testing.T) {
 		}
 		errch <- nil
 	}()
-	if err := doStash("", writer, secret); err != nil {
+	if err := doStash("", writer, false, secret); err != nil {
 		t.Fatal(err)
 	}
 	err = <-errch
@@ -344,12 +383,110 @@ func TestUnstash(t *testing.T) {
 		EncryptionKey: secret,
 		Key:           "key_not_in_stash",
 		Thing:         &gotThing2,
-	}, nil); err != nil {
+	}); err != nil {
 		if !errors.Is(err, anystore.ErrThingNotFound) {
 			t.Error(err)
 		}
 	} else {
 		t.Error("expected anystore.ErrThingNotFound")
+	}
+}
+
+func TestStash_gzip_doublestash(t *testing.T) {
+	secret := anystore.NewKey()
+	fl, err := os.CreateTemp("", "anystore-stash-double-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempfile := fl.Name()
+	fl.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+
+	expectedThing := &Thing{
+		Name:        strptr("Hello World"),
+		Number:      32,
+		Description: "There is not much to a Hello World thing.",
+		Components: []*Component{
+			{ID: 1, Name: "Component one"},
+			{ID: 2, Name: "Component two"},
+			{ID: 3, Name: "Component three"},
+		},
+	}
+
+	reader, writer := io.Pipe()
+	defer reader.Close() // writer will be closed by Stash
+	errch := make(chan error)
+	go func() {
+		defer close(errch)
+		gt, err := doUnstash("", reader, true, secret)
+		if err != nil {
+			errch <- err
+			return
+		}
+		if !reflect.DeepEqual(&gt, expectedThing) {
+			errch <- fmt.Errorf("got %s and expected %s does not match", reflect.TypeOf(gt), reflect.TypeOf(expectedThing))
+			return
+		}
+		errch <- nil
+	}()
+	if err := doStash(tempfile, writer, true, secret); err != nil {
+		t.Fatal(err)
+	}
+	err = <-errch
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotThing, err := doUnstash(tempfile, nil, true, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&gotThing, expectedThing) {
+		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
+	}
+}
+
+func TestUnstash_gzip(t *testing.T) {
+	secret := anystore.NewKey()
+	fl, err := os.CreateTemp("", "anystore-stash-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempfile := fl.Name()
+	fl.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+	expectedThing := &Thing{
+		Name:        strptr("Hello World"),
+		Number:      32,
+		Description: "There is not much to a Hello World thing.",
+		Components: []*Component{
+			{ID: 1, Name: "Component one"},
+			{ID: 2, Name: "Component two"},
+			{ID: 3, Name: "Component three"},
+		},
+	}
+	if err := doStash(tempfile, nil, true, secret); err != nil {
+		t.Fatal(err)
+	}
+	gotThing, err := doUnstash(tempfile, nil, true, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&gotThing, expectedThing) {
+		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
+	}
+	gotThing, err = doUnstashDefault(tempfile, nil, true, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(&gotThing, expectedThing) {
+		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
 	}
 }
 
@@ -366,9 +503,10 @@ func ExampleStash_reader_writer() {
 		defer close(errch)
 		if err := anystore.Unstash(&anystore.StashConfig{
 			Reader: reader,
+			GZip:   true,
 			Key:    "secret",
 			Thing:  &receivedGreeting,
-		}, nil); err != nil {
+		}); err != nil {
 			errch <- err
 		}
 		errch <- nil
@@ -376,15 +514,16 @@ func ExampleStash_reader_writer() {
 
 	if err := anystore.Stash(&anystore.StashConfig{
 		Writer: writer,
+		GZip:   true,
 		Key:    "secret",
 		Thing:  &greeting,
 	}); err != nil {
-		log.Fatal(err)
+		log.Fatal("Stash into io.Writer: ", err)
 	}
 
 	err := <-errch
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Unstash from io.Reader: ", err)
 	}
 
 	fmt.Println(receivedGreeting)

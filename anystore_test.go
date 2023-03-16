@@ -286,6 +286,47 @@ func BenchmarkStoreAndLoadPersistence(b *testing.B) {
 	}
 }
 
+func BenchmarkStoreAndLoadGZippedPersistence(b *testing.B) {
+	f, err := os.CreateTemp("", "anystore-benchmark-*")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	tempfile := f.Name()
+	f.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+
+	a, err := anystore.NewAnyStore(&anystore.Options{
+		EnablePersistence:   true,
+		GZipPersistenceFile: true,
+		PersistenceFile:     tempfile,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for i := 0; i < b.N; i++ {
+		value := fmt.Sprintf("%s-%d", b.Name(), b.N)
+		if err := a.Store(b.N, value); err != nil {
+			b.Fatal(err)
+		}
+		if v, err := a.Load(b.N); err != nil {
+			b.Fatal(err)
+		} else {
+			val, ok := v.(string)
+			if !ok {
+				b.Fatal("value is not a string")
+			}
+			if val != value {
+				b.Fatal("value does not match expected string")
+			}
+		}
+	}
+}
+
 func BenchmarkStoreAndLoad(b *testing.B) {
 	a, err := anystore.NewAnyStore(&anystore.Options{
 		EnablePersistence: false,
@@ -315,9 +356,9 @@ func BenchmarkStoreAndLoad(b *testing.B) {
 
 func FuzzConcurrentPersistence(f *testing.F) {
 
-	f.Add(1, "hello world")
+	f.Add(1, false, "hello world")
 
-	f.Fuzz(func(t *testing.T, count int, valueToStore string) {
+	f.Fuzz(func(t *testing.T, count int, gzip bool, valueToStore string) {
 		file, err := os.CreateTemp("", "anystore-concurrent-fuzz-*")
 		if err != nil {
 			fmt.Println(err)
@@ -336,8 +377,9 @@ func FuzzConcurrentPersistence(f *testing.F) {
 		go func() {
 			defer close(ch1)
 			one, err := anystore.NewAnyStore(&anystore.Options{
-				EnablePersistence: true,
-				PersistenceFile:   tempfile,
+				EnablePersistence:   true,
+				PersistenceFile:     tempfile,
+				GZipPersistenceFile: gzip,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -365,8 +407,9 @@ func FuzzConcurrentPersistence(f *testing.F) {
 		go func() {
 			defer close(ch2)
 			two, err := anystore.NewAnyStore(&anystore.Options{
-				EnablePersistence: true,
-				PersistenceFile:   tempfile,
+				EnablePersistence:   true,
+				PersistenceFile:     tempfile,
+				GZipPersistenceFile: gzip,
 			})
 			if err != nil {
 				t.Fatal(err)

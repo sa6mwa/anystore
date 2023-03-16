@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 )
 
 var (
@@ -99,6 +100,9 @@ func Unstash(conf *StashConfig) error {
 		if conf.GZip {
 			gzipReader, err := gzip.NewReader(bytes.NewReader(decrypted))
 			if err != nil {
+				if errors.Is(err, gzip.ErrHeader) {
+					return fmt.Errorf("%w (perhaps persistence is not gzipped?)", err)
+				}
 				return err
 			}
 			in = gob.NewDecoder(gzipReader)
@@ -106,6 +110,9 @@ func Unstash(conf *StashConfig) error {
 			in = gob.NewDecoder(bytes.NewReader(decrypted))
 		}
 		if err := in.Decode(&kv); err != nil {
+			if strings.Contains(err.Error(), "encoded unsigned integer out of range") && conf.GZip {
+				return fmt.Errorf("%w (perhaps persistence is gzipped?)", err)
+			}
 			return err
 		}
 		var ok bool
@@ -139,7 +146,7 @@ func Unstash(conf *StashConfig) error {
 	g := gob.NewDecoder(bytes.NewReader(thing))
 	// Decode into wherever StashConfig.Thing is pointing to.
 	if err := g.Decode(conf.Thing); err != nil {
-		return err
+		return fmt.Errorf("gob.Decode(Thing): %w", err)
 	}
 	return nil
 }
@@ -252,16 +259,29 @@ type BytesBufferWriteCloser struct {
 }
 
 // Close implements io.Closer on wrapped bytes.Buffer
-func (bbwc *BytesBufferWriteCloser) Close() error {
+func (b *BytesBufferWriteCloser) Close() error {
 	return nil
 }
 
-// NewStashReader first Stashes according to supplied StashConfig with the e
-overwrites the Writer field pointing to an internal bytes.Buffer.
+// NewStashReader Stashes according to supplied StashConfig, except only to an
+// internal io.WriteCloser (not to the File). The Writer is over-ridden and
+// pointed to an internal wrapped bytes.Buffer which it returns, unless there
+// was an error. The wrapped bytes.Buffer implements a fake io.Closer making it
+// an io.WriteCloser.
 func NewStashReader(conf *StashConfig) (*BytesBufferWriteCloser, error) {
 	var buf BytesBufferWriteCloser
-	conf.Writer = &buf
-	if err := Stash(conf); err != nil {
+	newConf := &StashConfig{
+		File:          "",
+		Reader:        nil,
+		Writer:        &buf,
+		GZip:          conf.GZip,
+		EncryptionKey: conf.EncryptionKey,
+		Key:           conf.Key,
+		Thing:         conf.Thing,
+		DefaultThing:  conf.DefaultThing,
+		Editor:        conf.Editor,
+	}
+	if err := Stash(newConf); err != nil {
 		return nil, err
 	}
 	return &buf, nil

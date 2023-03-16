@@ -490,6 +490,57 @@ func TestUnstash_gzip(t *testing.T) {
 	}
 }
 
+func TestNewStashReader(t *testing.T) {
+	secret := anystore.NewKey()
+	fl, err := os.CreateTemp("", "anystore-stash-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempfile := fl.Name()
+	fl.Close()
+	defer func() {
+		os.Remove(tempfile)
+		os.Remove(tempfile + ".lock")
+	}()
+	expectedThing := &Thing{
+		Name:        strptr("Hello World"),
+		Number:      32,
+		Description: "There is not much to a Hello World thing.",
+		Components: []*Component{
+			{ID: 1, Name: "Component one"},
+			{ID: 2, Name: "Component two"},
+			{ID: 3, Name: "Component three"},
+		},
+	}
+
+	stashconfig := anystore.StashConfig{
+		GZip:          true,
+		EncryptionKey: secret,
+		Key:           "package",
+		Thing:         expectedThing,
+	}
+
+	reader, err := anystore.NewStashReader(&stashconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotThing Thing
+	stashconfig.Reader = reader
+	stashconfig.Thing = &gotThing
+	if err := anystore.Unstash(&stashconfig); err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(&gotThing, expectedThing) {
+		t.Errorf("got %s and expected %s does not match", reflect.TypeOf(gotThing), reflect.TypeOf(expectedThing))
+	}
+
+	if err := reader.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
 func ExampleStash_reader_writer() {
 	greeting := "Hello world"
 	var receivedGreeting string

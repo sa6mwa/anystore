@@ -162,25 +162,25 @@ goarch: amd64
 pkg: github.com/sa6mwa/anystore
 cpu: AMD A8-3870 APU with Radeon(tm) HD Graphics
 BenchmarkStoreAndLoadPersistence
-BenchmarkStoreAndLoadPersistence-8                   889           1381091 ns/op
-BenchmarkStoreAndLoadPersistence-8                   788           1571761 ns/op
-BenchmarkStoreAndLoadPersistence-8                   879           1472726 ns/op
-BenchmarkStoreAndLoadPersistence-8                   860           1474219 ns/op
-BenchmarkStoreAndLoadPersistence-8                   963           1556344 ns/op
+BenchmarkStoreAndLoadPersistence-4                    28          42331426 ns/op
+BenchmarkStoreAndLoadPersistence-4                    37          41519115 ns/op
+BenchmarkStoreAndLoadPersistence-4                    30          42562259 ns/op
+BenchmarkStoreAndLoadPersistence-4                    30          40343840 ns/op
+BenchmarkStoreAndLoadPersistence-4                    30          40650118 ns/op
 BenchmarkStoreAndLoadGZippedPersistence
-BenchmarkStoreAndLoadGZippedPersistence-8            658           1975744 ns/op
-BenchmarkStoreAndLoadGZippedPersistence-8            637           1827412 ns/op
-BenchmarkStoreAndLoadGZippedPersistence-8            661           1869536 ns/op
-BenchmarkStoreAndLoadGZippedPersistence-8            663           1710743 ns/op
-BenchmarkStoreAndLoadGZippedPersistence-8            664           1770231 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             38          40602983 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             38          40317412 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             28          43019740 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             30          44645946 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             30          40907386 ns/op
 BenchmarkStoreAndLoad
-BenchmarkStoreAndLoad-8                          1840483               627.5 ns/op
-BenchmarkStoreAndLoad-8                          1973870               596.1 ns/op
-BenchmarkStoreAndLoad-8                          1827350               586.2 ns/op
-BenchmarkStoreAndLoad-8                          1983252               612.6 ns/op
-BenchmarkStoreAndLoad-8                          1910554               608.0 ns/op
+BenchmarkStoreAndLoad-4                           399135              3381 ns/op
+BenchmarkStoreAndLoad-4                           370418              3428 ns/op
+BenchmarkStoreAndLoad-4                           365362              3177 ns/op
+BenchmarkStoreAndLoad-4                           383518              3351 ns/op
+BenchmarkStoreAndLoad-4                           926636              2982 ns/op
 PASS
-ok      github.com/sa6mwa/anystore      24.158s
+ok      github.com/sa6mwa/anystore      26.854s
 ```
 
 ## Fuzzing

@@ -19,6 +19,8 @@ type Component struct {
 }
 
 func main() {
+	log.SetFlags(log.Ldate | log.Ltime | log.LUTC | log.Lshortfile)
+
 	thingToEdit := &Thing{
 		Name:        &[]string{"Hello World"}[0],
 		Number:      32,

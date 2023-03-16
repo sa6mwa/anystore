@@ -210,7 +210,7 @@ type AnyStore interface {
 	// Load and Len as they are non-locking and mere duplicates in the wrapped
 	// instance, but that could cause confusion. The error returned by the passed
 	// function is returned by Run.
-	Run(atomicOperation func(a AnyStore) error) error
+	Run(atomicOperation func(s AnyStore) error) error
 
 	load() error
 
@@ -438,7 +438,7 @@ func (a *anyStore) Keys() ([]any, error) {
 	return keys, nil
 }
 
-func (a *anyStore) Run(atomicOperation func(a AnyStore) error) error {
+func (a *anyStore) Run(atomicOperation func(s AnyStore) error) error {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 	anyStoreOverride := &unsafeAnyStore{a}
@@ -487,6 +487,9 @@ func (a *anyStore) load() error {
 			if a.gzip.Load() {
 				gzipReader, err := gzip.NewReader(bytes.NewReader(decrypted))
 				if err != nil {
+					if errors.Is(err, gzip.ErrHeader) {
+						return fmt.Errorf("%w (perhaps persistence is not gzipped?)", err)
+					}
 					return err
 				}
 				in = gob.NewDecoder(gzipReader)
@@ -494,6 +497,9 @@ func (a *anyStore) load() error {
 				in = gob.NewDecoder(bytes.NewReader(decrypted))
 			}
 			if err := in.Decode(&kvN); err != nil {
+				if strings.Contains(err.Error(), "encoded unsigned integer out of range") && !a.gzip.Load() {
+					return fmt.Errorf("%w (perhaps persistence is gzipped?)", err)
+				}
 				return err
 			}
 		}
@@ -539,6 +545,9 @@ func (a *anyStore) loadStoreAndSave(key any, value any, remove bool) error {
 			if a.gzip.Load() {
 				gzipReader, err := gzip.NewReader(bytes.NewReader(decrypted))
 				if err != nil {
+					if errors.Is(err, gzip.ErrHeader) {
+						return fmt.Errorf("%w (perhaps persistence is not gzipped?)", err)
+					}
 					return err
 				}
 				in = gob.NewDecoder(gzipReader)
@@ -546,6 +555,9 @@ func (a *anyStore) loadStoreAndSave(key any, value any, remove bool) error {
 				in = gob.NewDecoder(bytes.NewReader(decrypted))
 			}
 			if err := in.Decode(&kvN); err != nil {
+				if strings.Contains(err.Error(), "encoded unsigned integer out of range") && !a.gzip.Load() {
+					return fmt.Errorf("%w (perhaps persistence is gzipped?)", err)
+				}
 				return err
 			}
 		}
@@ -746,7 +758,7 @@ func (u *unsafeAnyStore) Keys() ([]any, error) {
 	return keys, nil
 }
 
-func (u *unsafeAnyStore) Run(atomicOperation func(a AnyStore) error) error {
+func (u *unsafeAnyStore) Run(atomicOperation func(s AnyStore) error) error {
 	return atomicOperation(u)
 }
 
@@ -788,8 +800,23 @@ func (u *unsafeAnyStore) load() error {
 			return err
 		}
 		if len(decrypted) > 0 {
-			in := gob.NewDecoder(bytes.NewReader(decrypted))
+			var in *gob.Decoder
+			if u.gzip.Load() {
+				gzipReader, err := gzip.NewReader(bytes.NewReader(decrypted))
+				if err != nil {
+					if errors.Is(err, gzip.ErrHeader) {
+						return fmt.Errorf("%w (perhaps persistence is not gzipped?)", err)
+					}
+					return err
+				}
+				in = gob.NewDecoder(gzipReader)
+			} else {
+				in = gob.NewDecoder(bytes.NewReader(decrypted))
+			}
 			if err := in.Decode(&kvN); err != nil {
+				if strings.Contains(err.Error(), "encoded unsigned integer out of range") && !u.gzip.Load() {
+					return fmt.Errorf("%w (perhaps persistence is gzipped?)", err)
+				}
 				return err
 			}
 		}
@@ -831,8 +858,23 @@ func (u *unsafeAnyStore) loadStoreAndSave(key any, value any, remove bool) error
 			return err
 		}
 		if len(decrypted) > 0 {
-			in := gob.NewDecoder(bytes.NewReader(decrypted))
+			var in *gob.Decoder
+			if u.gzip.Load() {
+				gzipReader, err := gzip.NewReader(bytes.NewReader(decrypted))
+				if err != nil {
+					if errors.Is(err, gzip.ErrHeader) {
+						return fmt.Errorf("%w (perhaps persistence is not gzipped?)", err)
+					}
+					return err
+				}
+				in = gob.NewDecoder(gzipReader)
+			} else {
+				in = gob.NewDecoder(bytes.NewReader(decrypted))
+			}
 			if err := in.Decode(&kvN); err != nil {
+				if strings.Contains(err.Error(), "encoded unsigned integer out of range") && !u.gzip.Load() {
+					return fmt.Errorf("%w (perhaps persistence is gzipped?)", err)
+				}
 				return err
 			}
 		}
@@ -848,12 +890,25 @@ func (u *unsafeAnyStore) loadStoreAndSave(key any, value any, remove bool) error
 	// Store as GOB, encrypt it and save as temporary file along-side the original
 	// and replace the main file via rename (as rename is atomic, it will not
 	// corrupt the main file in the event of a crash).
-	var gobOutput bytes.Buffer
-	out := gob.NewEncoder(&gobOutput)
+	var output bytes.Buffer
+	var out *gob.Encoder
+	var gzipWriter *gzip.Writer
+	if u.gzip.Load() {
+		gzipWriter = gzip.NewWriter(&output)
+		out = gob.NewEncoder(gzipWriter)
+	} else {
+		out = gob.NewEncoder(&output)
+	}
 	if err := out.Encode(kvN); err != nil {
+		if gzipWriter != nil {
+			gzipWriter.Close()
+		}
 		return err
 	}
-	encryptedOutput, err := Encrypt(encryptionKey, gobOutput.Bytes())
+	if gzipWriter != nil {
+		gzipWriter.Close()
+	}
+	encryptedOutput, err := Encrypt(encryptionKey, output.Bytes())
 	if err != nil {
 		return err
 	}

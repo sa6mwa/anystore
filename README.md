@@ -103,7 +103,7 @@ go func() {
   defer close(errch)
   if err := anystore.Unstash(&anystore.StashConfig{
     Reader: reader,
-		GZip:   true,
+	GZip:   true,
     Key:    "secret",
     Thing:  &receivedGreeting,
   }); err != nil {
@@ -114,7 +114,7 @@ go func() {
 
 if err := anystore.Stash(&anystore.StashConfig{
   Writer: writer,
-	GZip:   true,
+  GZip:   true,
   Key:    "secret",
   Thing:  &greeting,
 }); err != nil {

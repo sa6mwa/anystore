@@ -140,6 +140,16 @@ own random AES-256 base64-encoded encryption key using `./cmd/newkey`...
 go run github.com/sa6mwa/anystore/cmd/newkey
 ```
 
+## Encryption algorithm
+
+AnyStore uses standard library cryptographics
+exclusively. `crypto/aes` is used to cipher the data, `crypto/hmac`
+and `crypto/sha256` is used for hashing the IV (salt) and enciphered
+data. Technically, the data is encrypted using AES-128-CFB,
+AES-224-CFG or AES-256-CFB depending on the key length (where a 32
+byte key is preferred to select AES-256) which is signed/authenticated
+using HMAC-SHA256.
+
 ## Persistence, not performance
 
 The persistence-feature is not designed for performance, but for simplicity,
@@ -156,6 +166,36 @@ rename has completed successfully. On load, the lock on the lockfile is not
 acquired - the operation relies on the atomic nature of `rename`.
 
 ```
+## With HMAC-SHA256...
+
+$ go test -v -run=^# -bench=. -count=5
+goos: linux
+goarch: amd64
+pkg: github.com/sa6mwa/anystore
+cpu: AMD A8-3870 APU with Radeon(tm) HD Graphics
+BenchmarkStoreAndLoadPersistence
+BenchmarkStoreAndLoadPersistence-4                    27          42327515 ns/op
+BenchmarkStoreAndLoadPersistence-4                    28          41836633 ns/op
+BenchmarkStoreAndLoadPersistence-4                    30          40339892 ns/op
+BenchmarkStoreAndLoadPersistence-4                    30          42015679 ns/op
+BenchmarkStoreAndLoadPersistence-4                    30          40638348 ns/op
+BenchmarkStoreAndLoadGZippedPersistence
+BenchmarkStoreAndLoadGZippedPersistence-4             30          41886859 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             37          42730788 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             28          40363376 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             30          40642576 ns/op
+BenchmarkStoreAndLoadGZippedPersistence-4             37          41718753 ns/op
+BenchmarkStoreAndLoad
+BenchmarkStoreAndLoad-4                           355207              3397 ns/op
+BenchmarkStoreAndLoad-4                           355897              3059 ns/op
+BenchmarkStoreAndLoad-4                           390386              3295 ns/op
+BenchmarkStoreAndLoad-4                           357904              3410 ns/op
+BenchmarkStoreAndLoad-4                           358599              3370 ns/op
+PASS
+ok      github.com/sa6mwa/anystore      24.506s
+
+## Original run w/o HMAC-SHA256 below, no significant performance impact.
+
 $ go test -v -run=^# -bench=. -count=5
 goos: linux
 goarch: amd64

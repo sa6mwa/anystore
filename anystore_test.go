@@ -2,6 +2,9 @@ package anystore_test
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -686,5 +689,100 @@ func FuzzConcurrentPersistence(f *testing.F) {
 		<-ch1
 		<-ch2
 	})
+
+}
+
+func TestEncrypt(t *testing.T) {
+	encTestFunc := func(key []byte, data []byte) {
+		t.Logf("Testing %d bytes long key", len(key))
+		mac := hmac.New(sha256.New, key)
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if aes.BlockSize != block.BlockSize() {
+			t.Errorf("aes.BlockSize != block.BlockSize(), but %d and %d respectively", aes.BlockSize, block.BlockSize())
+		}
+		t.Logf("mac.Size() = %d", mac.Size())
+		t.Logf("aes.BlockSize = %d", aes.BlockSize)
+		t.Logf("block.BlockSize = %d", block.BlockSize())
+		encrypted, err := anystore.Encrypt(key, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(encrypted) < mac.Size()+aes.BlockSize {
+			t.Fatalf("length of enciphered data is less than mac.Size()+aes.BlockSize (want>%d, got %d)", mac.Size()+aes.BlockSize, len(encrypted))
+		}
+		// Get HMAC from cipher-text
+		encryptedHMAC := encrypted[:mac.Size()]
+		message := encrypted[mac.Size():]
+		//iv := encrypted[mac.Size() : mac.Size()+aes.BlockSize]
+		//cipherText := encrypted[mac.Size()+aes.BlockSize:]
+		if _, err := mac.Write(message); err != nil {
+			t.Fatal(err)
+		}
+		if !hmac.Equal(encryptedHMAC, mac.Sum(nil)) {
+			t.Fatal(anystore.ErrHMACValidationFailed)
+		}
+		// Decrypt must also work
+		decrypted, err := anystore.Decrypt(key, encrypted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(data, decrypted) {
+			t.Logf("origidata=%v", data)
+			t.Logf("decrypted=%v", decrypted)
+			t.Fatal("original data and decrypted data (from encryption) does not match")
+		}
+	}
+
+	key, err := anystore.ToBinaryEncryptionKey(anystore.NewKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(key) != 32 {
+		t.Fatalf("expected NewKey() to produce a 32 byte long key, but got %d bytes", len(key))
+	}
+
+	data := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+	keys := [][]byte{key, key[:24], key[:16]}
+	for _, k := range keys {
+		encTestFunc(k, data)
+	}
+}
+
+func TestDecrypt(t *testing.T) {
+	decrypTestFunc := func(key []byte, data []byte) {
+		t.Logf("Testing %d bytes long key", len(key))
+		mac := hmac.New(sha256.New, key)
+		if len(data) < mac.Size()+aes.BlockSize {
+			t.Fatalf("length of cipher data is less than mac.Size()+aes.BlockSize (want>%d, got %d)", mac.Size()+aes.BlockSize, len(data))
+		}
+		messageWithIV := data[mac.Size():]
+		t.Logf("mac.Size() == %d", mac.Size())
+		t.Logf("data is %d bytes long, w/o HMAC == %d", len(data), len(messageWithIV))
+		messageHMAC := data[:mac.Size()]
+		if _, err := mac.Write(messageWithIV); err != nil {
+			t.Fatal(err)
+		}
+		if !hmac.Equal(messageHMAC, mac.Sum(nil)) {
+			t.Fatal(anystore.ErrHMACValidationFailed)
+		}
+	}
+
+	data := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+	key, err := anystore.ToBinaryEncryptionKey(anystore.NewKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, k := range [][]byte{key, key[:24], key[:16]} {
+		ciphered, err := anystore.Encrypt(k, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decrypTestFunc(k, ciphered)
+	}
 
 }

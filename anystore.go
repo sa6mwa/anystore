@@ -1,10 +1,12 @@
 /*
 AnyStore is a thread-safe key/value store utilizing map[any]any in the
-background with atomic.Value on read and mutex locks on write for performance.
-The AnyStore map can optionally be persisted to disk as an AES-128/192/256
-encrypted GOB file. For access from multiple instances sharing the same map,
-POSIX syscall.Flock is used to exclusively lock a lockfile during save. There is
-no support for Windows or other non-POSIX systems without flock(2).
+background with atomic.Value on read and mutex locks on write for
+performance. The AnyStore map can optionally be persisted to disk as
+an AES-128/192/256 encrypted GOB file with HMAC-SHA256 for
+authentication and validation of the data. For access from multiple
+instances sharing the same map, POSIX syscall.Flock is used to
+exclusively lock a lockfile during save. There is no support for
+Windows or other non-POSIX systems without flock(2).
 
 Example:
 
@@ -136,7 +138,9 @@ import (
 	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/hex"
@@ -156,8 +160,9 @@ const DefaultEncryptionKey string = "cTAvflqncVmYD7bLM31fP3TVuwEoosMMwehpIwn1P84
 const DefaultPersistenceFile string = "~/.config/anystore/anystore.db"
 
 var (
-	ErrKeyLength      error = errors.New("key length must be 16, 24 or 32 (for AES-128, AES-192 or AES-256)")
-	ErrWroteTooLittle error = errors.New("wrote too few bytes")
+	ErrKeyLength            error = errors.New("key length must be 16, 24 or 32 (for AES-128, AES-192 or AES-256)")
+	ErrWroteTooLittle       error = errors.New("wrote too few bytes")
+	ErrHMACValidationFailed error = errors.New("HMAC validation failed (corrupt message or wrong encryption key)")
 )
 
 // A thread-safe key/value store using string as key and interface{} (any) as
@@ -968,9 +973,18 @@ func NewKey() string {
 	return base64.RawStdEncoding.EncodeToString(randomBytes)
 }
 
+// Encrypt encrypts data using a 16, 24 or 32 byte long key (for
+// AES-128-CFB, AES-224-CFB or AES-256-CFB). The cipher-data is
+// prepended with a HMAC-SHA256 hash (32 bytes) and IV (or salt if you
+// prefer). Same key is used for HMAC and. The format of the output
+// data slice is:
+//
+//	b = bytes
+//	[HMAC_of_IV_and_cipherdata_32_b][IV_16_b][cipherdata]
 func Encrypt(key []byte, data []byte) ([]byte, error) {
 	// Maybe implement later, but comes from an external package...
 	//dk := pbkdf2.Key(key, []byte(salt), 4096, 32, sha256.New)
+
 	switch len(key) {
 	case 16, 24, 32:
 	default:
@@ -980,16 +994,31 @@ func Encrypt(key []byte, data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	ciphered := make([]byte, aes.BlockSize+len(data))
-	salt := ciphered[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+
+	mac := hmac.New(sha256.New, key)
+
+	ciphered := make([]byte, mac.Size()+aes.BlockSize+len(data))
+	iv := ciphered[mac.Size() : aes.BlockSize+mac.Size()]
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
 		return nil, err
 	}
-	stream := cipher.NewCFBEncrypter(block, salt)
-	stream.XORKeyStream(ciphered[aes.BlockSize:], data)
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(ciphered[mac.Size()+aes.BlockSize:], data)
+
+	if _, err := mac.Write(ciphered[mac.Size():]); err != nil {
+		return nil, err
+	}
+	copy(ciphered[:mac.Size()], mac.Sum(nil))
 	return ciphered, nil
 }
 
+// Decrypt authenticates and decrypts data using a 16, 24 or 32 byte
+// long key (for AES-128-CFB, AES-224-CFB or AES-256-CFB). The data should start
+// with a HMAC-SHA256 hash (32 bytes) initialized with key. The hash function
+// should hash the rest of data which includes an aes.BlockSize long IV
+// and the AES-CFB encrypted data. Returns clear-data or error in case
+// of failure. Returns anystore.ErrHMACValidationFailed when the key
+// is wrong or the message is corrupt or tampered with.
 func Decrypt(key []byte, data []byte) ([]byte, error) {
 	switch len(key) {
 	case 16, 24, 32:
@@ -1000,12 +1029,31 @@ func Decrypt(key []byte, data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(data) < aes.BlockSize {
-		return nil, fmt.Errorf("data shorter than AES block size (%d)", aes.BlockSize)
+
+	mac := hmac.New(sha256.New, key)
+
+	if len(data) < mac.Size()+aes.BlockSize {
+		return nil, fmt.Errorf("data shorter than HMAC + AES block size (%d)", mac.Size()+aes.BlockSize)
 	}
-	salt := data[:aes.BlockSize]
-	deciphered := make([]byte, len(data[aes.BlockSize:]))
-	stream := cipher.NewCFBDecrypter(block, salt)
-	stream.XORKeyStream(deciphered, data[aes.BlockSize:])
+
+	messageMAC := data[:mac.Size()]
+	if _, err := mac.Write(data[mac.Size():]); err != nil {
+		return nil, err
+	}
+	if !hmac.Equal(messageMAC, mac.Sum(nil)) {
+		return nil, ErrHMACValidationFailed
+	}
+	iv := data[mac.Size() : mac.Size()+aes.BlockSize]
+	deciphered := make([]byte, len(data[mac.Size()+aes.BlockSize:]))
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(deciphered, data[mac.Size()+aes.BlockSize:])
 	return deciphered, nil
+}
+
+func ToBinaryEncryptionKey(base64RawStdEncoding string) ([]byte, error) {
+	binkey, err := base64.RawStdEncoding.DecodeString(base64RawStdEncoding)
+	if err != nil {
+		return nil, err
+	}
+	return binkey, nil
 }

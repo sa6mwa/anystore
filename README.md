@@ -100,30 +100,30 @@ defer reader.Close() // Stash closes the writer, it's an io.ReadCloser
 errch := make(chan error)
 
 go func() {
-  defer close(errch)
-  if err := anystore.Unstash(&anystore.StashConfig{
-    Reader: reader,
+	defer close(errch)
+	if err := anystore.Unstash(&anystore.StashConfig{
+		Reader: reader,
 		GZip:   true,
-    Key:    "secret",
-    Thing:  &receivedGreeting,
-  }); err != nil {
-    errch <- err
-  }
-  errch <- nil
+		Key:    "secret",
+		Thing:  &receivedGreeting,
+	}); err != nil {
+		errch <- err
+	}
+	errch <- nil
 }()
 
 if err := anystore.Stash(&anystore.StashConfig{
-  Writer: writer,
+	Writer: writer,
 	GZip:   true,
-  Key:    "secret",
-  Thing:  &greeting,
+	Key:    "secret",
+	Thing:  &greeting,
 }); err != nil {
-  log.Fatal(err)
+	log.Fatal(err)
 }
 
 err := <-errch
 if err != nil {
-  log.Fatal(err)
+	log.Fatal(err)
 }
 
 fmt.Println(receivedGreeting)

@@ -58,6 +58,7 @@ func main() {
 		}); err != nil {
 			log.Fatal(err)
 		}
+		fmt.Println("Saved configuration as ", file)
 	}
 
 	j, err := json.MarshalIndent(configuration, "", "  ")

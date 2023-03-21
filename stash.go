@@ -84,6 +84,7 @@ func Unstash(conf *StashConfig) error {
 	if err != nil {
 		return err
 	}
+	defer a.Close()
 	var gobbedThing any
 	if conf.Reader != nil {
 		// Read encrypted anyMap
@@ -202,6 +203,7 @@ func Stash(conf *StashConfig) error {
 	if err != nil {
 		return err
 	}
+	defer a.Close()
 
 	// Use gob to store the struct (or other value) instead of re-inventing
 	// dereference of all pointers. It is also unlikely that the interface stored

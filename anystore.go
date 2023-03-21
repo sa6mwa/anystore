@@ -28,6 +28,7 @@ Example:
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer persisted.Close()
 
 	if err := ephemeral.Store("hello", "world"); err != nil {
 		log.Fatal(err)
@@ -57,12 +58,10 @@ Example:
 	}
 	log.Println(v)
 
-	}
-
-AnyStore also feature a configuration mode with convenience-functions Stash,
-Unstash and EditThing. Whether you choose to hard-code an encryption key in the
-application or provide one via environment variables, using Stash, Unstash and
-EditThing is simple...
+AnyStore also feature a configuration mode with convenience-functions
+Stash, Unstash and EditThing. Whether you choose to hard-code an
+encryption key in the application or provide one via environment
+variables, using Stash, Unstash and EditThing is simple...
 
 	package main
 
@@ -216,6 +215,9 @@ type AnyStore interface {
 	// instance, but that could cause confusion. The error returned by the passed
 	// function is returned by Run.
 	Run(atomicOperation func(s AnyStore) error) error
+
+	// If persistence is enabled, Close removes the lockfile.
+	Close() error
 
 	load() error
 
@@ -450,6 +452,30 @@ func (a *anyStore) Run(atomicOperation func(s AnyStore) error) error {
 	return atomicOperation(anyStoreOverride)
 }
 
+func (a *anyStore) Close() error {
+	if a.persist.Load() {
+		// Lock the store
+		a.mutex.Lock()
+		defer a.mutex.Unlock()
+		file, ok := a.savefile.Load().(string)
+		if !ok {
+			return errors.New("persistence not set")
+		}
+		lockfile := file + ".lock"
+		_, err := os.Stat(lockfile)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if err := os.Remove(lockfile); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *anyStore) load() error {
 	file, ok := a.savefile.Load().(string)
 	if !ok {
@@ -521,13 +547,30 @@ func (a *anyStore) loadStoreAndSave(key any, value any, remove bool) error {
 	}
 	lockfile := file + ".lock"
 	unlink := true
-	lockfd, err := syscall.Open(lockfile, syscall.O_CREAT|syscall.O_RDWR, 0666)
-	if err != nil {
-		return err
-	}
-	defer syscall.Close(lockfd)
-	if err := syscall.Flock(lockfd, syscall.LOCK_EX); err != nil {
-		return err
+	var lockfd int
+	for {
+		var err error
+		lockfd, err = syscall.Open(lockfile, syscall.O_CREAT|syscall.O_RDWR, 0666)
+		if err != nil {
+			return err
+		}
+		if err := syscall.Flock(lockfd, syscall.LOCK_EX); err != nil {
+			syscall.Close(lockfd)
+			return err
+		}
+		var stat_t syscall.Stat_t
+		if err := syscall.Fstat(lockfd, &stat_t); err != nil {
+			syscall.Close(lockfd)
+			return err
+		}
+		if stat_t.Nlink == 0 {
+			// File deleted (no hard links), recreate it
+			syscall.Close(lockfd)
+			continue
+		}
+		// We should have a lockfd with an existing file at this point
+		defer syscall.Close(lockfd)
+		break
 	}
 	f, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
@@ -767,6 +810,27 @@ func (u *unsafeAnyStore) Run(atomicOperation func(s AnyStore) error) error {
 	return atomicOperation(u)
 }
 
+func (u *unsafeAnyStore) Close() error {
+	if u.persist.Load() {
+		file, ok := u.savefile.Load().(string)
+		if !ok {
+			return errors.New("persistence not set")
+		}
+		lockfile := file + ".lock"
+		_, err := os.Stat(lockfile)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if err := os.Remove(lockfile); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (u *unsafeAnyStore) load() error {
 	file, ok := u.savefile.Load().(string)
 	if !ok {
@@ -838,13 +902,30 @@ func (u *unsafeAnyStore) loadStoreAndSave(key any, value any, remove bool) error
 	}
 	lockfile := file + ".lock"
 	unlink := true
-	lockfd, err := syscall.Open(lockfile, syscall.O_CREAT|syscall.O_RDWR, 0666)
-	if err != nil {
-		return err
-	}
-	defer syscall.Close(lockfd)
-	if err := syscall.Flock(lockfd, syscall.LOCK_EX); err != nil {
-		return err
+	var lockfd int
+	for {
+		var err error
+		lockfd, err = syscall.Open(lockfile, syscall.O_CREAT|syscall.O_RDWR, 0666)
+		if err != nil {
+			return err
+		}
+		if err := syscall.Flock(lockfd, syscall.LOCK_EX); err != nil {
+			syscall.Close(lockfd)
+			return err
+		}
+		var stat_t syscall.Stat_t
+		if err := syscall.Fstat(lockfd, &stat_t); err != nil {
+			syscall.Close(lockfd)
+			return err
+		}
+		if stat_t.Nlink == 0 {
+			// File deleted (no hard links), recreate it
+			syscall.Close(lockfd)
+			continue
+		}
+		// We should have a lockfd with an existing file at this point
+		defer syscall.Close(lockfd)
+		break
 	}
 	f, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {

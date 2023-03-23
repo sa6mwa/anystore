@@ -6,7 +6,7 @@ an AES-128/192/256 encrypted GOB file with HMAC-SHA256 for
 authentication and validation of the data. For access from multiple
 instances sharing the same map, POSIX syscall.Flock is used to
 exclusively lock a lockfile during save. There is no support for
-Windows or other non-POSIX systems without flock(2).
+Windows or other non-POSIX systems missing flock(2).
 
 Example:
 
@@ -107,7 +107,8 @@ variables, using Stash, Unstash and EditThing is simple...
 			EncryptionKey: anystore.DefaultEncryptionKey,
 			Key:           "configuration",
 			Thing:         &configuration,
-		}, defaultConf); err != nil {
+			DefaultThing:  defaultConf,
+		}); err != nil {
 			log.Fatal(err)
 		}
 
@@ -118,7 +119,7 @@ variables, using Stash, Unstash and EditThing is simple...
 				Key:           "configuration",
 				Thing:         &configuration,
 				// Editor: "/usr/bin/emacs",
-			}, defaultConf); err != nil {
+			}); err != nil {
 				log.Fatal(err)
 			}
 		}
@@ -161,7 +162,7 @@ const DefaultPersistenceFile string = "~/.config/anystore/anystore.db"
 var (
 	ErrKeyLength            error = errors.New("key length must be 16, 24 or 32 (for AES-128, AES-192 or AES-256)")
 	ErrWroteTooLittle       error = errors.New("wrote too few bytes")
-	ErrHMACValidationFailed error = errors.New("HMAC validation failed (corrupt message or wrong encryption key)")
+	ErrHMACValidationFailed error = errors.New("HMAC validation failed (corrupt data or wrong encryption key)")
 )
 
 // A thread-safe key/value store using string as key and interface{} (any) as
@@ -310,13 +311,14 @@ func (a *anyStore) SetPersistenceFile(file string) (AnyStore, error) {
 		file = filepath.Join(dirname, file[2:])
 	}
 	dir, _ := filepath.Split(file)
-	if _, err := os.Stat(file); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			if err := os.MkdirAll(dir, 0777); err != nil {
-				return a, err
+
+	if dir != "" && dir != "." && dir != ".." {
+		if _, err := os.Stat(dir); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				if err := os.MkdirAll(dir, 0777); err != nil {
+					return a, err
+				}
 			}
-		} else {
-			return a, err
 		}
 	}
 

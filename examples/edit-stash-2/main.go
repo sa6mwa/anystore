@@ -13,7 +13,7 @@ import (
 type MyConfig struct {
 	ListenAddress string
 	Username      string
-	Token         string
+	Token         *string
 	Endpoints     []*Endpoint
 }
 
@@ -27,13 +27,13 @@ func main() {
 	defaultConf := &MyConfig{
 		ListenAddress: "0.0.0.0:1234",
 		Username:      "superuser",
-		Token:         "abc123",
+		Token:         &[]string{"abc123"}[0],
 		Endpoints: []*Endpoint{
 			{ID: 1, Name: "Endpoint 1", URL: "https://endpoint1.local"},
 			{ID: 2, Name: "Endpoint 2", URL: "https://endpoint2.local"},
 		},
 	}
-	file := "~/.myconfigfile.db"
+	file := "~/.anystore/examples-edit-stash-2.db"
 
 	var configuration MyConfig
 
@@ -53,7 +53,6 @@ func main() {
 			EncryptionKey: anystore.DefaultEncryptionKey,
 			Key:           "configuration",
 			Thing:         &configuration,
-			DefaultThing:  defaultConf,
 			// Editor: "/usr/bin/emacs",
 		}); err != nil {
 			log.Fatal(err)

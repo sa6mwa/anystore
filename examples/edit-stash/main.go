@@ -21,9 +21,10 @@ type Component struct {
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.LUTC | log.Lshortfile)
 
-	thingToEdit := &Thing{
+	actualThing := &Thing{}
+
+	defaultThing := &Thing{
 		Name:        &[]string{"Hello World"}[0],
-		Number:      32,
 		Description: "There is not much to a Hello World thing.",
 		Components: []*Component{
 			{ID: 1, Name: "Component one"},
@@ -32,24 +33,22 @@ func main() {
 		},
 	}
 
-	defaultThing := &Thing{
-		Name:        &[]string{"default"}[0],
-		Description: "the default thing",
-		Components: []*Component{
-			{ID: 1, Name: "hello"},
-		},
-	}
+	file := "~/.anystore/examples-edit-stash.db"
 
-	file := "~/.testing-edit-stash.db"
-
-	if err := anystore.EditThing(&anystore.StashConfig{
+	conf := &anystore.StashConfig{
 		File:          file,
 		GZip:          true,
 		EncryptionKey: anystore.DefaultEncryptionKey,
 		Key:           "configuration",
-		Thing:         thingToEdit,
+		Thing:         actualThing,
 		DefaultThing:  defaultThing,
-	}); err != nil {
+	}
+
+	if err := anystore.Unstash(conf); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := anystore.EditThing(conf); err != nil {
 		log.Fatal(err)
 	}
 

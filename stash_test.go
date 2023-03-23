@@ -1,6 +1,7 @@
 package anystore_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -581,4 +582,63 @@ func ExampleStash_reader_writer() {
 
 	// Output:
 	// Hello world
+}
+
+func ExampleStash() {
+	type Endpoint struct {
+		Name string
+		URL  string
+	}
+	type MyConfig struct {
+		Username  string
+		Token     *string
+		Endpoints []Endpoint
+	}
+
+	defaultConfig := &MyConfig{
+		Username: "anonymous",
+		Endpoints: []Endpoint{
+			{
+				Name: "Default",
+				URL:  "https://localhost:8081/default",
+			},
+		},
+	}
+
+	var configuration MyConfig
+
+	conf := &anystore.StashConfig{
+		File:          "~/.anystore/stash-example-01.db",
+		GZip:          true,
+		EncryptionKey: anystore.DefaultEncryptionKey,
+		Key:           "configuration",
+		Thing:         &configuration,
+		DefaultThing:  defaultConfig,
+	}
+
+	// First, load persisted configuration from file. If none found, use
+	// defaultConfig as values for configuration.
+
+	if err := anystore.Unstash(conf); err != nil {
+		log.Fatal(err)
+	}
+
+	// Override if something has been provided from the command line, etc.
+
+	token, ok := os.LookupEnv("TOKEN")
+	if ok {
+		configuration.Token = &token
+	}
+
+	// Persist configuration to disk.
+
+	if err := anystore.Stash(conf); err != nil {
+		log.Fatal(err)
+	}
+
+	j, err := json.MarshalIndent(&configuration, "", "  ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(j))
 }

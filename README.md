@@ -66,7 +66,6 @@ func main() {
 			EncryptionKey: anystore.DefaultEncryptionKey,
 			Key:           "configuration",
 			Thing:         &configuration,
-			DefaultThing:  defaultConf,
 			// Editor: "/usr/bin/emacs",
 		}); err != nil {
 			log.Fatal(err)

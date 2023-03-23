@@ -30,27 +30,55 @@ var (
 // on success and failure. If File is an empty string (== "") and Writer is not
 // nil, Stash will only write to the io.Writer.
 type StashConfig struct {
-	File          string         // AnyStore DB file, if empty, use Reader/Writer
-	Reader        io.Reader      // If nil, use File for Unstash, if not, prefer Reader over File
-	Writer        io.WriteCloser // If nil, use File for Stash, if not, write to both Writer and File (if File is not an empty string)
-	GZip          bool           // GZip data before encryption
-	EncryptionKey string         // 16, 24 or 32 byte long base64-encoded string
-	Key           string         // Key name where to store Thing
-	Thing         any            // Usually a struct with data, properties, configuration, etc
-	DefaultThing  any            // If Unstash get os.ErrNotExist or key is missing, use this as default Thing if not nil
-	Editor        string         // Editor to use to edit Thing as JSON
+	// AnyStore DB file, if empty, use Reader/Writer.
+	File string
+
+	// If nil, use File for Unstash, if not, prefer Reader over File.
+	Reader io.Reader
+
+	// If nil, use File for Stash, if not, write to both Writer and File
+	// (if File is not an empty string).
+	Writer io.WriteCloser
+
+	// GZip data before encryption.
+	GZip bool
+
+	// 16, 24 or 32 byte long base64-encoded string.
+	EncryptionKey string
+
+	// Key name where to store Thing.
+	Key string
+
+	// Thing is usually a struct with data, properties, configuration,
+	// etc. Must be a pointer. On Unstash (and EditThing), Thing should
+	// be zeroed (new/empty) or the result of underlying gob.Decode is
+	// unpredictable.
+	Thing any
+
+	// If Unstash get os.ErrNotExist or key is missing, use this as
+	// default Thing if not nil. Must be a pointer.
+	DefaultThing any
+
+	// Editor to use to edit Thing as JSON.
+	Editor string
 }
 
 // "stash, verb. to put (something of future use or value) in a safe or secret
 // place"
 //
-// Unstash loads a "Thing" from a place specified in a StashConfig, usually an
-// AnyStore DB file, but the Stash and Unstash functions also support io.Reader
-// and io.Writer (io.WriteCloser). Reader/writer is essentially an in-memory
-// version of the physical DB file, Unstash does io.ReadAll into memory in order
-// to decrypt and de-GOB the data. A previous file-Stash command can be
-// Unstashed via the io.Reader. Unstash prefers io.Reader when both
-// StashConfig.File and StashConfig.Reader are defined.
+// Unstash loads a "Thing" from a place specified in a StashConfig,
+// usually an AnyStoreDB file, into the object pointed to by the Thing
+// field in conf. Thing should be an uninitialized/new/empty object
+// for predictable results, full overwrite of any present value is not
+// guaranteed.
+//
+// The Stash and Unstash functions also support io.Reader and
+// io.Writer (io.WriteCloser). Reader/writer is essentially an
+// in-memory version of the physical DB file, Unstash does io.ReadAll
+// into memory in order to decrypt and de-GOB the data. A previous
+// file-Stash command can be Unstashed via the io.Reader. Unstash
+// prefers io.Reader when both StashConfig.File and StashConfig.Reader
+// are defined.
 //
 // StashConfig instructs how functions anystore.Stash and anystore.Unstash
 // should save/load a "stash". If Reader is not nil and File is not an empty

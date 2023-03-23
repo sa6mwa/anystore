@@ -23,13 +23,21 @@ var (
 	ErrNotATerminal  error = errors.New("os.Stdin is not a terminal")
 )
 
+// EditThing is an interactive variant of Stash, editing the Thing
+// before Stashing it. EditThing does not Unstash before editing, it
+// uses the actual Thing. If you need to load Thing from persistence
+// before editing, call Unstash prior to EditThing (make sure Thing is
+// zero/new/empty before Unstash). EditThing uses encoding/json for
+// editing, beware if a user enters "null" on a non-pointer field and
+// saves, encoding/json will ignore it effectively using the original
+// value without producing an error. Similarily, if a user removes a
+// field while editing, the original value will be retained.
+//
+// Environment variable EDITOR is used as a json editor falling back
+// to conf.Editor and finally one of the DefaultEditors.
 func EditThing(conf *StashConfig) error {
 	if !IsUnixTerminal(os.Stdin) {
 		return ErrNotATerminal
-	}
-
-	if err := Unstash(conf); err != nil {
-		return err
 	}
 
 	executables := []string{}
@@ -106,6 +114,7 @@ func EditThing(conf *StashConfig) error {
 				goto retryQuestion
 			}
 		}
+
 		if err := Stash(conf); err != nil {
 			return err
 		}
